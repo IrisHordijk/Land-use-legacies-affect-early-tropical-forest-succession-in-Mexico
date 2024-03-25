@@ -1,0 +1,2068 @@
+---
+title: "Land use legacies affect early tropical forest succession in Mexico"
+author: "Iris Hordijk"
+date: "25/03/2024"
+output: html_document
+---
+###Load packages
+```{r Packages}
+library(tidyverse)
+library(readxl)
+library(vegan)
+library(iNEXT)
+library(data.table)
+library(cowplot)
+library(grid)
+library(gridExtra)
+library(ggplot2)
+library(Hmisc)
+library(ggrepel)
+library(MASS)
+library(lmtest)
+library(car)
+library(MuMIn)
+library(randomForest)
+library(lme4)
+library(dineq)
+library(Hmisc)
+library(pheatmap)
+library(writexl)
+library(gtools)
+library(plspm)
+library(dplyr)
+```
+###Load data
+```{r data}
+rm(list = ls())
+
+Soil_Chem <- read_excel("~/Documents/PANTROP/Data/Soil data/Results chemical analyses/MX_Soil_Chem.xlsx", sheet="Chemical analyses")
+
+BulkDensity_DF <- read_excel("~/Documents/PANTROP/Data/Soil data/Results bulk density/MX_BulkDensity.xlsx", sheet="Bulk density average") %>% as.data.frame()
+
+BulkDensity_WF <- read_excel("~/Documents/PANTROP/Data/Soil data/Results bulk density/MX_BulkDensity.xlsx", sheet="Bulk density") %>% as.data.frame()
+
+suppressWarnings(Vegetation_DF <- read_excel("~/Documents/PANTROP/Data/Nizanda/MX_DF_FC_LT_20_21_22.xlsx", sheet = "Line transects")) 
+
+Vegetation_WF <- read_excel("~/Documents/PANTROP/Data/Loma Bonita/MX_WT_FC_LT_22.xlsx", sheet = "Line transects 2022")
+
+LU <-read_excel("~/Documents/PANTROP/Data/Interviews/MX_Interviews_data.xlsx", sheet="Interview data")
+
+suppressWarnings(DF_SS <- read_excel("~/Documents/PANTROP/Data/Nizanda/MX_DF_SS_20_21_22.xlsx", sheet = "Seedling strips") %>% dplyr::select(-Country, -Date,-Form_nr, -Subplot, -X_coord, -Y_coord, -Comment) %>% as.data.frame()) 
+
+suppressWarnings(WF_SS <- read_excel("~/Documents/PANTROP/Data/Loma Bonita/MX_WT_FC_SS_21_22.xlsx", sheet = "Seedling strips") %>% dplyr::select(-Country, -Date,-Form_nr, -Subplot, -X_coord, -Y_coord, -Comment) %>% as.data.frame()) 
+
+Dependent_varsFinalDif <- fread("~/Documents/PANTROP/Manuscripts/Forest cover & LUI MX/Dependent_varsFinalDif.csv") 
+
+```
+###Variable selection: Soil
+```{r Soil variable selection}
+
+###Dry forest
+Dry_Soil <- Soil_Chem %>% filter(Category == "ForestCover" & Forest == "Dry")
+Dry_Soil <- left_join(Dry_Soil, BulkDensity_DF, by = c("Forest", "Category", "Site", "Subsite_code"))
+Dry_Soil$Site <- as.numeric(gsub("ForestCover","", Dry_Soil$Site))
+Dry_Soil <- Dry_Soil %>% filter(Site < 15)
+Dry_Soil_select <- Dry_Soil %>% dplyr::select(-Forest, -Category, -Site, -Subsite.x, -Subsite.y, -Subsite_code, -Classification, -Comment.x, -Comment.y, -Depth, -'Weight_wet(g)', -'Weight_dry(g)', -'Weight_stones(g)', -Average_dry_weight, -Average_stone_weight, -`Stone_content(g/cm3)`, -Soil_type, -Parental_material, -Slope) #Almost no variation stone content, left out
+
+###PCA Geo-Soil 
+# Dry_Soil_select <- Dry_Soil_select %>% rename(`Years residence`=Yrs_res) 
+
+new_order = c("pH","CE" ,"OM_perc","N","P",                   
+              "K","Ca","Mg", "Na",                  
+              "Text_sand_perc", "Text_silt_perc", "Text_clay_perc", "Bulk_density(g/cm3)",     
+              "Fe", "Cu", "Zn", "Mn")
+Dry_Soil_select <- Dry_Soil_select[, new_order]
+
+Dry_Soil_select <- Dry_Soil_select %>% mutate_if(is.character,as.numeric)
+pca_res <- prcomp(Dry_Soil_select, scale. = TRUE)
+
+barplot(pca_res$rotation[,1], main="PC 1 Loadings Plot", las=2) #PCA statistics
+barplot(pca_res$rotation[,2], main="PC 2 Loadings Plot", las=2)
+
+pca_res$Category <- c("#030303", "#030303", "#030303", "#030303", "#030303",
+                      "#015f91", "#015f91", "#015f91", "#015f91", 
+                      "#6e6e6e", "#6e6e6e", "#6e6e6e", "#6e6e6e",
+                      "#8f0101", "#8f0101", "#8f0101", "#8f0101")
+
+pca.df<- data.frame(pca1 = pca_res$x[,1], pca2 = pca_res$x[,2], SoilType = as.factor(Dry_Soil$Soil_type), Slope=as.factor(Dry_Soil$Slope))
+pca.df2<- data.frame(pca1 = pca_res$rotation[,1], pca2 = pca_res$rotation[,2], Category = as.factor(pca_res$Category), labels = row.names(pca_res$rotation))
+
+PCA_Soil_Nizanda <- ggplot(data=pca.df, aes(x=pca1, y = pca2)) + 
+         geom_point(aes(color = factor(SoilType), shape =factor(Slope),), size = 4, alpha = 1) + #stat_ellipse(aes(group=SoilType, color=SoilType), level = 0.68) +
+         scale_shape_manual(values= c(15, 16, 17, 18, 8)) +
+         scale_color_manual(values = c("#e3dad3", "#9c806a", "#754e2f", "#170a00")) +
+         theme_bw() + labs(x = "PCA 1 (36%)", y = "PCA 2 (26%)") + ggtitle("Soil-Nizanda") +
+         theme(axis.line = element_line(colour = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank(), 
+          legend.position = "none", 
+          plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+          axis.text.x = element_text(family="sans", size = 14, color = "black"),
+          axis.text.y = element_text(family="sans", size = 14, color = "black"),
+          axis.title.x = element_text(family="sans", size = 14, color = "black"),
+          axis.title.y = element_text(family="sans", size = 14, color = "black")) +
+          geom_segment(data=pca.df2,aes(x=0, xend=pca1*10,y=0,yend=pca2*10), arrow = arrow(length = unit(0.5, "cm")), color = pca.df2$Category, alpha = 1) + 
+          geom_text_repel(data=pca.df2,aes(x=10*pca1,y=10.5*pca2, label = labels), color = pca.df2$Category, size=5, fontface="bold") 
+
+###Cluster analysis
+Dry_Soil_num <- sapply(Dry_Soil_select, as.numeric )
+Cluster <- varclus(Dry_Soil_num, similarity=c("spearman"),
+        type=c("data.matrix"), 
+        method="complete",
+        data=NULL, subset=NULL, na.action=na.retain,
+        trans=c("none")) #"square", "abs", 
+
+heatmap <- pheatmap(Cluster$sim)
+
+##########Take out clay, silt & Mn due to high correlations
+
+###Wet forest 
+BulkDensity_WF_select <- BulkDensity_WF %>% filter(Category == "ForestCover" & Forest == "Wet")
+
+# Boxplot <-  ggplot(data=BulkDensity_WF_select, aes(x=Depth, y=`Bulk_density(g/cm3)`)) + geom_boxplot()
+# two.way <- aov(`Bulk_density(g/cm3)` ~ factor(Depth), data = BulkDensity_WF_select)
+# summary(two.way)
+# plot(two.way)
+# tukey.two.way<-TukeyHSD(two.way) #10-15cm (higher) is significantly different from 0-5cm (lower) #take 5-10cm as this is not significantly different from the both other depths
+# tukey.two.way
+
+BulkDensity_WF_Finalselect <- BulkDensity_WF_select %>% filter(Depth == "5-10cm")
+                                                   
+Wet_Soil <- Soil_Chem %>% filter(Category == "ForestCover" & Forest == "Wet")
+Wet_Soil <- left_join(Wet_Soil, BulkDensity_WF_Finalselect, by = c("Forest", "Category", "Site"))
+
+Wet_Soil_num <- Wet_Soil %>% mutate_if(is.character, as.numeric)
+Wet_Soil_num <- Wet_Soil_num[complete.cases(Wet_Soil_num[ , c('P', 'Na')]), ]
+Wet_Soil_select <- Wet_Soil_num %>% dplyr::select(-Forest, -Category, -Site, -Subsite.x, -Subsite.y, -Subsite_code.x, -Subsite_code.y, -Classification, -Depth, -'Weight_wet(g)', -'Weight_dry(g)', -'Weight_stones(g)', -`Average dry weight`, -`Average stone weight`, -Comment, -`Stone_content(g/cm3)`, -Soil_type, -Parental_material, -Slope) #remove Stone_content(g/cm3) as most measures are zero
+
+new_order = c("pH","CE" ,"OM_perc","N","P",                   
+              "K","Ca","Mg", "Na",                  
+              "Text_sand_perc", "Text_silt_perc", "Text_clay_perc", "Bulk_density(g/cm3)",     
+              "Fe", "Cu", "Zn", "Mn")
+Wet_Soil_select <- Wet_Soil_select[, new_order]
+
+pca_res <- prcomp(Wet_Soil_select, scale. = TRUE)
+
+barplot(pca_res$rotation[,1], main="PC 1 Loadings Plot", las=2) #PCA statistics
+barplot(pca_res$rotation[,2], main="PC 2 Loadings Plot", las=2)
+
+pca_res$Category <- c("#030303", "#030303", "#030303", "#030303", "#030303",
+                      "#015f91", "#015f91", "#015f91", "#015f91", 
+                      "#6e6e6e", "#6e6e6e", "#6e6e6e", "#6e6e6e",
+                      "#8f0101", "#8f0101", "#8f0101", "#8f0101")
+
+pca.df<- data.frame(pca1 = pca_res$x[,1], pca2 = pca_res$x[,2], SoilType = as.factor(Wet_Soil_num$Soil_type), Slope=as.factor(Wet_Soil_num$Slope))
+pca.df2<- data.frame(pca1 = pca_res$rotation[,1], pca2 = pca_res$rotation[,2], Category = as.factor(pca_res$Category), labels = row.names(pca_res$rotation))
+
+PCA_Soil_LomaBonita <- ggplot(data=pca.df, aes(x=pca1, y = pca2)) + 
+         geom_point(aes(color = factor(SoilType), shape =factor(Slope),), size = 4, alpha = 1) + #stat_ellipse(aes(group=SoilType, color=SoilType), level = 0.68) +
+         scale_shape_manual(values= c(15, 16, 17, 18, 8)) +
+         scale_color_manual(values = c("#e3dad3", "#9c806a", "#754e2f", "#170a00")) +
+         theme_bw() + labs(x = "PCA 1 (36%)", y = "PCA 2 (26%)") + ggtitle("Soil-Loma Bonita") +
+         theme(axis.line = element_line(colour = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank(), 
+          legend.position = "none", 
+          plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+          axis.text.x = element_text(family="sans", size = 14, color = "black"),
+          axis.text.y = element_text(family="sans", size = 14, color = "black"),
+          axis.title.x = element_text(family="sans", size = 14, color = "black"),
+          axis.title.y = element_text(family="sans", size = 14, color = "black")) +
+          geom_segment(data=pca.df2,aes(x=0, xend=pca1*10,y=0,yend=pca2*10), arrow = arrow(length = unit(0.5, "cm")), color = pca.df2$Category, alpha = 1) + 
+          geom_text_repel(data=pca.df2,aes(x=10*pca1,y=10.5*pca2, label = labels), color = pca.df2$Category, size=5, fontface="bold") 
+
+###Cluster analysis
+Wet_Soil_num <- sapply(Wet_Soil_select, as.numeric )
+Cluster <- varclus(Wet_Soil_num, similarity=c("spearman"),
+        type=c("data.matrix"), 
+        method="complete",
+        data=NULL, subset=NULL, na.action=na.retain,
+        trans=c("none")) #"square", "abs", 
+
+heatmap <- pheatmap(Cluster$sim)
+
+#######Take out clay, silt & Mg due to high correlations
+
+#Dry forest correlations
+Correlations <- rcorr(as.matrix(Dry_Soil_select), type=c("spearman")) 
+
+Boxplot <- boxplot(as.data.frame(Dry_Soil_select)) #separate boxplots: CE, N, K, Na, Cu, Zn. pH between 6 and 8
+boxplot(Dry_Soil_select$CE) #CE almost no variation
+boxplot(Dry_Soil_select$N) 
+boxplot(Dry_Soil_select$K) #K almost no variation
+boxplot(Dry_Soil_select$Na) #Mayority of obs are zero (#9)
+boxplot(Dry_Soil_select$Cu)
+boxplot(Dry_Soil_select$Zn) #ZN almost no variation
+boxplot(Dry_Soil_select$`Bulk_density(g/cm3)`)
+boxplot(Dry_Soil_select$`Stone_content(g/cm3)`) #no variation, better to exclude
+
+#drop: sand+silt percentage (related to clay content), Mn (related to Cu), stone content (majority of obs are zero), Na (majority of obs are zero)
+
+Dry_Soil_Finalselect <- Dry_Soil_select %>% dplyr::select(-Text_sand_perc, -Text_silt_perc, -Mn, -`Stone_content(g/cm3)`, -Na)
+
+pca_DF_Soil <- prcomp(Dry_Soil_Finalselect, scale. = TRUE)
+pca.df_DF_Soil <- data.frame(pca1 = pca_DF_Soil$x[,1], pca2 = pca_DF_Soil$x[,2])
+pca.df_DF_Soil2<- data.frame(pca1 = pca_DF_Soil$rotation[,1], pca2 = pca_DF_Soil$rotation[,2], labels = row.names(pca_DF_Soil$rotation))
+Plot_PCA <- ggplot(data=pca.df_DF_Soil, aes(x=pca1, y = pca2)) + geom_point() +
+  geom_segment(data=pca.df_DF_Soil2,aes(x=0, xend=pca1*6,y=0,yend=pca2*6), arrow = arrow(length = unit(0.5, "cm")), alpha = 1) +
+  geom_text_repel(data=pca.df_DF_Soil2,aes(x=6*pca1,y=6.5*pca2, label =labels), size=5, fontface="bold") 
+
+#Wet forest correlations
+Wet_Soil_mutate <- Wet_Soil_select %>% mutate_if(is.character,as.numeric)
+Correlations <- rcorr(as.matrix(Wet_Soil_mutate), type=c("spearman")) 
+
+Boxplot <- boxplot(as.data.frame(Wet_Soil_mutate)) 
+Data_Boxplot2 <- Wet_Soil_mutate %>% dplyr::select(pH, CE, OM_perc, N, P, K, Na, Cu, Zn, `Bulk_density(g/cm3)`, `Stone_content(g/cm3)`) 
+Boxplot2 <- boxplot(as.data.frame(Data_Boxplot2)) #separate boxplots: CE, N, Na, Cu, Stone content and bulk density. pH between 5 and 8
+
+boxplot(Wet_Soil_mutate$CE) #CE almost no variation
+boxplot(Wet_Soil_mutate$N) 
+boxplot(Wet_Soil_mutate$Na) 
+boxplot(Wet_Soil_mutate$Cu)
+boxplot(Wet_Soil_mutate$`Bulk_density(g/cm3)`)
+boxplot(Wet_Soil_mutate$`Stone_content(g/cm3)`) #many zero measurements, better to exclude
+
+Wet_Soil_Finalselect <- Wet_Soil_mutate %>% dplyr::select(-Text_sand_perc, -`Stone_content(g/cm3)`) %>% as.data.frame()
+
+Wet_Soil_Finalselect$P[is.na(Wet_Soil_Finalselect$P)] <- 0
+Wet_Soil_Finalselect$Na[is.na(Wet_Soil_Finalselect$Na)] <- 0
+
+pca_WF_Soil <- prcomp(Wet_Soil_Finalselect, scale. = TRUE)
+pca.df_WF_Soil <- data.frame(pca1 = pca_WF_Soil$x[,1], pca2 = pca_WF_Soil$x[,2])
+pca.df_WF_Soil2<- data.frame(pca1 = pca_WF_Soil$rotation[,1], pca2 = pca_WF_Soil$rotation[,2], labels = row.names(pca_WF_Soil$rotation))
+Plot_PCA <- ggplot(data=pca.df_WF_Soil, aes(x=pca1, y = pca2)) + geom_point() +
+  geom_segment(data=pca.df_WF_Soil2,aes(x=0, xend=pca1*6,y=0,yend=pca2*6), arrow = arrow(length = unit(0.5, "cm")), alpha = 1) +
+  geom_text_repel(data=pca.df_WF_Soil2,aes(x=6*pca1,y=6.5*pca2, label =labels), size=5, fontface="bold") 
+
+#possibly drop: sand percentage (related to clay content), stone content, silt percentage (not explaining much of the variation between the plots), Na, CE (almost no variation)
+
+```
+###Variable selection: Land uses
+```{r LU}
+###########################DRY FOREST
+###Correlations
+DF_LU <- LU[which(LU$Forest=='Dry'& LU$Category=='ForestCover'),]
+  
+DF_LU_Select <- DF_LU %>% dplyr::select(-Country, -Forest, -Category, -Site, -Owner, -Mult_labour, -Yrs_lu, -Total_tree_nr, -For_age, -weed_problem, -Soil_quality) #variables not applicable to RQ's #variables not reliable because very subjective (weed_problem) or #variables measured in another way (soil quality/total_tree_nr/For_age)
+
+#Check variation 
+summary(DF_LU_Select)
+
+Correlations <- rcorr(as.matrix(DF_LU_Select), type=c("spearman")) 
+
+#Check relationship fallow duration-crop type-use of exotic grasses
+plot(DF_LU$Fallow_dur, DF_LU$Cr_type)
+plot(DF_LU$Fallow_dur, DF_LU$Exotic_grass)
+plot(DF_LU$Cr_type, DF_LU$Exotic_grass)
+
+plot(DF_LU$Prev_lu, DF_LU$Herb_use)
+
+###PCA
+DF_LU_SelectCor <- DF_LU_Select %>% dplyr::select( -Cattle_nr, -Tot_dur, -Pest_use, -Fallow_dur, -Exotic_grass, -Herb_use, -Cr_type, -weed_freq, -Months_pa, -weed_type, -Til_type)
+pca_DF_LU <- prcomp(DF_LU_SelectCor, scale. = TRUE)
+pca.df_DF_LU <- data.frame(pca1 = pca_DF_LU$x[,1], pca2 = pca_DF_LU$x[,2])
+pca.df_DF_LU2<- data.frame(pca1 = pca_DF_LU$rotation[,1], pca2 = pca_DF_LU$rotation[,2], labels = row.names(pca_DF_LU$rotation)) #, sig = pca_res$sig, 
+Plot_PCA <- ggplot(data=pca.df_DF_LU, aes(x=pca1, y = pca2)) + geom_point() +
+  geom_segment(data=pca.df_DF_LU2,aes(x=0, xend=pca1*6,y=0,yend=pca2*6), arrow = arrow(length = unit(0.5, "cm")), alpha = 1) +  #color = pca.df2$sig, 
+  geom_text_repel(data=pca.df_DF_LU2,aes(x=6*pca1,y=6.5*pca2, label =labels), size=5, fontface="bold") #, label = labels #color = pca.df2$sig, 
+
+#11 variables: "Prev_lu" "Prev_cr" "Field_size"   "fire_events"  "Trees_plant"  "Machine" "Til_freq"  "Herb_pest_freq"  "Fert_use"   "Wood_use"  "Stock_rate" 
+
+###########################WET FOREST
+###Correlations
+WF_LU <- LU[which(LU$Forest=='Wet' & LU$Category=='ForestCover'),]
+  
+WF_LU_Select <- WF_LU %>% dplyr::select(-Country, -Forest, -Category, -Site, -Owner, -Yrs_res, -Prev_res, -Mult_labour, -Yrs_lu, -Total_tree_nr, -For_age, -weed_problem, -Soil_quality) #variables not applicable to RQ's #variables not reliable (weed_problem) or #variables measured in another way (soil quality/total_tree_nr/For_age)
+WF_LU_SelectVar <- WF_LU_Select %>% dplyr::select(-Prev_lu, -Prev_cr, -Fallow_dur, -Til_type, -Til_freq, -Pest_use, -Fert_use, -Exotic_grass) #Variables excluded without or with little variation in the data set 
+Correlations <- rcorr(as.matrix(WF_LU_SelectVar), type=c("spearman")) 
+
+###PCA
+WF_LU_SelectCor <- WF_LU_SelectVar %>% dplyr::select( -Cattle_nr, -Herb_use)  #13 variables
+pca_WF_LU <- prcomp(WF_LU_SelectCor, scale. = TRUE)
+pca.df_WF_LU <- data.frame(pca1 = pca_WF_LU$x[,1], pca2 = pca_WF_LU$x[,2])
+pca.df_WF_LU2<- data.frame(pca1 = pca_WF_LU$rotation[,1], pca2 = pca_WF_LU$rotation[,2], labels = row.names(pca_WF_LU$rotation)) #, sig = pca_res$sig,
+Plot_PCA <- ggplot(data=pca.df_WF_LU, aes(x=pca1, y = pca2)) + geom_point() +
+  geom_segment(data=pca.df_WF_LU2,aes(x=0, xend=pca1*6,y=0,yend=pca2*6), arrow = arrow(length = unit(0.5, "cm")), alpha = 1) +  #color = pca.df2$sig,
+  geom_text_repel(data=pca.df_WF_LU2,aes(x=6*pca1,y=6.5*pca2, label =labels), size=5, fontface="bold") #, label = labels #color = pca.df2$sig,
+
+#11 variables: "Field_size"     "Tot_dur"        "fire_events"    "Trees_plant"     "weed_freq"      "weed_type"      "Herb_pest_freq" "Cr_type"        "Wood_use"      "Stock_rate"     "Months_pa" 
+
+#"Mo_cr", "Machine"  eruit
+
+```
+###Calculate Vegetation cover
+```{r Vegetation cover}
+
+###Dry forest
+Vegetation_DF$Clasification <- dplyr::recode_factor(Vegetation_DF$Clasification, `NA`="NoVegetation", Arbol="Cover_Tree", Forbia_con_tallo="Cover_StemForb", Pasto = "Cover_Grass", Trepadora_herbacea = "Cover_HerbaceousClimber", Trepadora_Lenosa ="Cover_WoodyClimber", Arbusto="Cover_Shrub", Desecho_del_rio="Cover_RiverWaste")
+Vegetation_DF <- dplyr::filter(Vegetation_DF, !Clasification=="Cover_RiverWaste") 
+
+# #Count how many individuals were undefined to species level
+# Vegetation_DF_count <- dplyr::filter(Vegetation_DF, !Clasification=="NoVegetation") 
+# Vegetation_DF_countNA <- dplyr::filter(Vegetation_DF, Species=="Desconocido" | Species=="NA") 
+# #156 species identified to at least family level #4745 ind #80 not identified #98 identified 
+
+Vegetation_DF_Sum <- Vegetation_DF %>% group_by(Year, Site) %>% summarise(SumTotal=n()) %>% as.data.frame()
+Vegetation_DF_Cover <- Vegetation_DF %>% group_by(Year, Site, Clasification) %>% summarise(VegetationCover=n()) %>% as.data.frame()
+
+Vegetation_DF_Perc <- left_join(Vegetation_DF_Cover, Vegetation_DF_Sum, by=c("Year", "Site"))
+Vegetation_DF_Perc$PercVegetation <- (Vegetation_DF_Perc$VegetationCover/Vegetation_DF_Perc$SumTotal)*100
+
+Vegetation_DF_PercSelect <- Vegetation_DF_Perc %>% dplyr::select(Year, Site, Clasification, PercVegetation)
+Vegetation_DF_PercSelect$PercVegetation <- round(Vegetation_DF_PercSelect$PercVegetation, 2)
+Vegetation_DF_Spread <- Vegetation_DF_PercSelect %>% spread(Clasification, PercVegetation) %>% replace(is.na(.), 0) %>% as.data.frame()
+
+Vegetation_DF_PercSelectFinal <- Vegetation_DF_PercSelect %>% filter(!Site=="ForestCover15", !Site=="ForestCover16", !Site=="ForestCover17", !Site=="ForestCover18", !Site=="ForestCover19", !Site=="ForestCover20", !Site=="ForestCover21")
+Vegetation_DF_graph <- ggplot(Vegetation_DF_PercSelectFinal, aes(x=factor(Year), y=PercVegetation, fill=factor(Clasification))) + geom_boxplot() + ggtitle("Dry forest - Vegetation cover") + ylab("Vegetation cover (%)") + xlab("Year") + theme_classic() + theme(plot.title = element_text(hjust = 0.5, size = 15, face = "bold"), legend.position = "right") 
+
+###Wet forest
+Vegetation_WF$Clasification <- recode_factor(Vegetation_WF$Clasification, `NA`="NoVegetation", Grass="Cover_Grass", `Stem forb`="Cover_StemForb", `Herbaceous climber`="Cover_HerbaceousClimber", `Herbaceous fern` ="Cover_HerbaceousFern", `Woody climber` ="Cover_WoodyClimber", Tree="Cover_Tree", Shrub="Cover_Shrub", `Climbing palm`="Cover_ClimbingPalm", `Tree palm`="Cover_TreePalm")
+
+#Count how many individuals were undefined to species level
+Vegetation_WF_count <- dplyr::filter(Vegetation_WF, !Clasification=="NoVegetation") 
+Vegetation_WF_countNA <- dplyr::filter(Vegetation_WF, Species=="Desconocida" | Species=="NA") 
+#76 species identified to at least family level #1303 ind #91 not identified #93% identified
+
+Vegetation_WF_Sum <- Vegetation_WF %>% group_by(Year, Site) %>% summarise(SumTotal=n()) %>% as.data.frame()
+
+# #Calculate percentage Botoncillo per plot
+# Vegetation_WF_Botoncillo <- dplyr::filter(Vegetation_WF, Species=="Botoncillo")
+# Vegetation_WF_Boto <- Vegetation_WF_Botoncillo %>% group_by(Year, Site) %>% summarise(SumBoto=n()) %>% as.data.frame()
+# Vegetation_WF_Boto$PercBoto <- (Vegetation_WF_Boto$SumBoto/Vegetation_WF_Sum$SumTotal)*100
+
+Vegetation_WF_Cover <- Vegetation_WF %>% group_by(Year, Site, Clasification) %>% summarise(VegetationCover=n()) %>% as.data.frame()
+
+Vegetation_WF_Perc <- left_join(Vegetation_WF_Cover, Vegetation_WF_Sum, by=c("Year", "Site"))
+Vegetation_WF_Perc$PercVegetation <- (Vegetation_WF_Perc$VegetationCover/Vegetation_WF_Perc$SumTotal)*100
+
+Vegetation_WF_PercSelect <- Vegetation_WF_Perc %>% dplyr::select(Year, Site, Clasification, PercVegetation)
+Vegetation_WF_PercSelect$PercVegetation <- round(Vegetation_WF_PercSelect$PercVegetation, 2)
+Vegetation_WF_Spread <- Vegetation_WF_PercSelect %>% spread(Clasification, PercVegetation) %>% replace(is.na(.), 0) %>% as.data.frame()
+
+Vegetation_WF_graph <- ggplot(Vegetation_WF_PercSelect, aes(x=factor(Year), y=PercVegetation, fill=factor(Clasification))) + geom_boxplot() + ggtitle("Wet forest - Vegetation cover") + ylab("Vegetation cover (%)") + xlab("Year") + theme_classic() + theme(plot.title = element_text(hjust = 0.5, size = 15, face = "bold"), legend.position = "right")
+
+Vegetation_DF_Spread$Cover_HerbaceousFern <- "0"
+Vegetation_DF_Spread$Cover_HerbaceousFern <- as.numeric(Vegetation_DF_Spread$Cover_HerbaceousFern)
+
+Vegetation_DF_Spread$Cover_ClimbingPalm <- "0"
+Vegetation_DF_Spread$Cover_ClimbingPalm <- as.numeric(Vegetation_DF_Spread$Cover_ClimbingPalm)
+
+Vegetation_DF_Spread$Cover_TreePalm <- "0"
+Vegetation_DF_Spread$Cover_TreePalm <- as.numeric(Vegetation_DF_Spread$Cover_TreePalm)
+
+Vegetation_DF_Spread$Forest <- "Dry"
+
+Vegetation_WF_Spread$Forest <- "Wet"
+
+Vegetation_DF_Spread <- Vegetation_DF_Spread[ , order(names(Vegetation_DF_Spread))]
+Vegetation_WF_Spread <- Vegetation_WF_Spread[ , order(names(Vegetation_WF_Spread))]
+
+Vegetation_coverMX <- rbind(Vegetation_DF_Spread, Vegetation_WF_Spread)
+
+fwrite(Vegetation_coverMX, file="Vegetation_coverMX.csv")
+
+```
+
+###Calculate Seedlings Basal Area (cm2 per plot) 
+```{r BA Seedlings}
+###DF
+DF_FC_SS <- DF_SS %>% mutate(Category = if_else(Category == "ForestCover", 1, 2)) %>% filter(Category == 1) ###Only seedlings originated from seed -> & Regeneration_Seed == "S"
+DBH_distinct21$Year <- 2021 
+DBH_distinct22$Year <- 2022
+DF_Seedlings21 <- anti_join(DF_FC_SS, DBH_distinct21, by= c("Year", "Site", "Transect_nr", "Seedling_nr"))
+DF_Seedlings <- anti_join(DF_Seedlings21, DBH_distinct22, by= c("Year", "Site", "Transect_nr", "Seedling_nr"))
+
+DF_Seedlings <- DF_Seedlings[complete.cases(DF_Seedlings$DM_30cm_mm),] #Filter NA op 30cm
+DF_Seedlings_BA <- DF_Seedlings %>% mutate(BA_30cm = DM_30cm_mm/10, BA_130cm = DM_130cm_mm/10) %>% mutate(across(BA_30cm:BA_130cm, function(x){pi*(x^2)/4000}))
+
+DF_Seedlings_BA_Pl <- DF_Seedlings_BA %>% group_by(Year, Site) %>% mutate(Ngini=n()) %>% summarise(Gini=ifelse(Ngini>1,gini.wtd(BA_30cm),0), BA_30cm = sum(BA_30cm), BA_130cm = sum(BA_130cm), N=n()) %>% slice(1) %>% as.data.frame()
+DF_Seedlings_BA_Pl[nrow(DF_Seedlings_BA_Pl) + 1,] <- c("2020", "ForestCover10", "0", "0", "0", "0") #No seedlings measured
+DF_Seedlings_BA_Pl[nrow(DF_Seedlings_BA_Pl) + 1,] <- c("2022", "ForestCover15", "0", "0", "0", "0") #No seedlings measured
+
+DF_Seedlings_BA_Pl$Forest <- "Dry"
+
+###WF
+#Check relationship 0-30cm and further calculations with 0 or 30cm
+WF_FC_SS <- WF_SS %>% mutate(Category = if_else(Category == "ForestCover", 1, 2)) %>% filter(Category == 1) # & Regeneration_Seed == "S" ###Only seedlings originated from seed
+
+WF_FC_SS$DM_0cm_mm_1 <- as.numeric(WF_FC_SS$DM_0cm_mm_1)
+WF_FC_SS$DM_30cm_mm_1 <- as.numeric(WF_FC_SS$DM_30cm_mm_1)      
+WF_Seedlings_BA <- WF_FC_SS %>% mutate(across(DM_0cm_mm_1:DM_130cm_mm, ~replace(., is.na(.), 0))) %>% mutate(across(DM_0cm_mm_1:DM_130cm_mm, function(x){(pi*((x/10)^2))/4000})) %>% mutate(BA_0cm = rowSums(across(DM_0cm_mm_1:DM_0cm_mm_6)), BA_30cm = rowSums(across(DM_30cm_mm_1:DM_30cm_mm_5)), BA_130cm = rowSums(across(DM_130cm_mm))) %>% dplyr::select(Forest, Year, Site, Transect_nr, Seedling_nr, Species, Regeneration_Seed, Height_m, Longitud_m, BA_0cm, BA_30cm, BA_130cm)
+
+SameSeedlings2022 <- WF_Seedlings_BA[which(WF_Seedlings_BA$Year=='2022' & WF_Seedlings_BA$BA_30cm > 0), ] 
+SameSeedlings2021 <- WF_Seedlings_BA[which(WF_Seedlings_BA$Year=='2021'), ] 
+SameSeedlings2020 <- WF_Seedlings_BA[which(WF_Seedlings_BA$Year=='2020'), ] 
+
+###Calculate BA 30 cm seedlings 2021
+SameSeedlings21_22 <- left_join(SameSeedlings2021, SameSeedlings2022, by=c("Forest", "Site", "Transect_nr", "Seedling_nr", "Species"))
+SameSeedlings21_22$Ratio <- SameSeedlings21_22$BA_0cm.y/SameSeedlings21_22$BA_30cm.y
+summary(SameSeedlings2022$BA_0cm/SameSeedlings2022$BA_30cm)
+
+SameSeedlings21_22 <- SameSeedlings21_22 %>% dplyr::mutate(Ratio = replace_na(Ratio, 4.045413))
+SameSeedlings21_22$BA_30cm.x <- ifelse(SameSeedlings21_22$BA_0cm.x>0, SameSeedlings21_22$BA_0cm.x*SameSeedlings21_22$Ratio, 0)
+
+###Calculate BA 30 cm seedlings 2020
+SameSeedlings20_22 <- left_join(SameSeedlings2020, SameSeedlings2022, by=c("Forest", "Site", "Transect_nr", "Seedling_nr", "Species"))
+SameSeedlings20_22$Ratio <- SameSeedlings20_22$BA_0cm.y/SameSeedlings20_22$BA_30cm.y
+
+SameSeedlings20_22 <- SameSeedlings20_22 %>% dplyr::mutate(Ratio = replace_na(Ratio, 4.045413))
+SameSeedlings20_22$BA_30cm.x <- ifelse(SameSeedlings20_22$BA_0cm.x>0, SameSeedlings20_22$BA_0cm.x*SameSeedlings20_22$Ratio, 0)
+
+###Merge new BA data
+WF_Seedlings_BA_2022 <- WF_Seedlings_BA[(WF_Seedlings_BA$Year=="2022"), ]
+WF_Seedlings_BA_2022 <- WF_Seedlings_BA_2022 %>% dplyr::select(-Longitud_m)
+
+New2021 <- SameSeedlings21_22 %>% dplyr::select(Forest, Year.x, Site, Transect_nr, Seedling_nr, Species, Regeneration_Seed.x, Height_m.x, BA_0cm.x, BA_30cm.x, BA_130cm.x)
+New2021 <- New2021[complete.cases(New2021$BA_30cm.x), ]
+New2021 <- New2021 %>% rename(Year=Year.x, Regeneration_Seed=Regeneration_Seed.x, Height_m=Height_m.x, BA_0cm=BA_0cm.x, BA_30cm=BA_30cm.x, BA_130cm=BA_130cm.x)
+
+New2020 <- SameSeedlings20_22 %>% dplyr::select(Forest, Year.x, Site, Transect_nr, Seedling_nr, Species, Regeneration_Seed.x, Height_m.x, BA_0cm.x, BA_30cm.x, BA_130cm.x)
+New2020 <- New2020[complete.cases(New2020$BA_30cm.x), ]
+New2020 <- New2020 %>% rename(Year=Year.x, Regeneration_Seed=Regeneration_Seed.x, Height_m=Height_m.x, BA_0cm=BA_0cm.x, BA_30cm=BA_30cm.x, BA_130cm=BA_130cm.x)
+
+WF_Seedlings_BA_Final <- rbind(New2020, New2021, WF_Seedlings_BA_2022)
+
+WF_Seedlings_BA_Pl <- WF_Seedlings_BA_Final %>% group_by(Year, Site) %>% mutate(Ngini=n()) %>% summarise(Gini=ifelse(Ngini>1,gini.wtd(BA_30cm),0), BA_30cm = sum(BA_30cm), BA_130cm = sum(BA_130cm), N=n()) %>% slice(1) %>% as.data.frame()
+
+WF_Seedlings_BA_Pl$Forest <- "Wet"
+  
+BA_Seedlings <- rbind(DF_Seedlings_BA_Pl, WF_Seedlings_BA_Pl)
+BA_Seedlings$AdultSeedling <- "Seedling" 
+
+fwrite(BA_Seedlings, file="BA_Seedlings.csv")
+
+```
+
+###Calculate Richness, Diversity & Evenness
+```{r Diversity}
+
+###Seedlings
+SS_DF <- subset(DF_SS) %>% filter(!Site=="ForestCover15", !Site=="ForestCover16", !Site=="ForestCover17", !Site=="ForestCover18", !Site=="ForestCover19", !Site=="ForestCover20", !Site=="ForestCover21", !Category=="Biodiversity")
+
+SS_DF_select <- SS_DF[which(SS_DF$DM_30cm_mm < 10),]
+
+DF_Seedlings <- SS_DF %>% dplyr::select(Forest, Year, Site, Species, Regeneration_Seed) %>% group_by(Forest, Year, Site, Species) %>% summarise(Number_Ind = as.numeric(n())) %>% as.data.frame()
+DF_Seedlings$Site <- paste(DF_Seedlings$Forest, DF_Seedlings$Site, DF_Seedlings$Year, sep="_")
+
+WF_Seedlings <- WF_SS %>% dplyr::select(Forest, Year, Site, Species, Regeneration_Seed) %>% group_by(Forest, Year, Site, Species) %>% summarise(Number_Ind = as.numeric(n())) %>% as.data.frame()
+WF_Seedlings <- WF_Seedlings %>% group_by(Site) %>% filter(Number_Ind > 0) %>% as.data.frame() #Filter out sites without individuals
+WF_Seedlings$Site <- paste(WF_Seedlings$Forest, WF_Seedlings$Site, WF_Seedlings$Year, sep="_")
+
+Seedlings <- rbind(DF_Seedlings, WF_Seedlings)
+
+#The Hill numbers are interpreted as the ‘effective number of species’ or ‘species equivalents’ (MacArthur 1965, 1972; Hill 1973; Jost 2006, 2007). For any community, if we obtain a #value qD = w, then the diversity of this community is the same as that of a community with w equally abundant species.The number of equally-common species required to give a particular #value of an index is called the "effective number of species". This is the true diversity of the community in question.
+
+#calculate diversity
+Data_Hill <-  subset(Seedlings, select = -c(Year)) 
+Data_Hill <- Data_Hill %>% spread(Site, Number_Ind) %>% replace(is.na(.), 0) %>% as.data.frame()
+Data_Hill_select <- Data_Hill %>% dplyr::select(where( ~ is.numeric(.x) && sum(.x) != 0)) #Data_Hill %>% group_by(Site) %>% filter(sum(Dry_ForestCover1_2020:Wet_ForestCover20_2022) >= 1)
+  
+HillNrs <- iNEXT(Data_Hill_select, q=0, datatype="abundance") #SC:sample coverage estimate   
+
+AsyEst <- as.data.frame(HillNrs$AsyEst)
+S <- subset(AsyEst, HillNrs$AsyEst$Diversity=="Species richness", select=c(Observed)) %>% rename(S = Observed) #q0 extrapolated Species richness
+Diversity <- subset(AsyEst, HillNrs$AsyEst$Diversity=="Shannon diversity", select=c(Observed))  %>% rename(Diversity = Observed) #q1 exponent of Shannon Diversity (Hill number 1)
+Simpson <- subset(AsyEst, HillNrs$AsyEst$Diversity=="Simpson diversity", select=c(Observed))  %>% rename(Simpson = Observed) #q2 Simpson's Diversity #0-1 higher value -> higher diversity & lower dominance
+
+#Richness_t <- AdultTrees %>% dplyr::select(-Year, -Forest) %>% group_by(Site) %>% spread(Species, Number_Ind) %>% replace(is.na(.), 0) %>% column_to_rownames(var="Site") 
+#Richness_t <- Richness_t %>% `colnames<-`(c(as.numeric(1:ncol(Richness_t)))) %>% as.data.frame()
+
+#S <- as.numeric(specnumber(Richness_t)) 
+#Diversity <- diversity(Richness_t) #Shannon Diversity
+E_Stand <- (Diversity-1)/(S-1) #Standardised Hill's evenness #0-1 higher value -> more even
+E_Stand <- E_Stand %>% rename(E_Stand = Diversity)
+Seedling_FC_Diversity <- cbind.data.frame(S, Diversity, Simpson, E_Stand)
+Seedling_FC_Diversity$Site <- names(Data_Hill_select)
+
+Seedling_FC_Diversity <- Seedling_FC_Diversity %>% mutate(S=ifelse(Site=="Wet_ForestCover19_2021" | Site=="Wet_ForestCover20_2021",0,S),
+                                                          Diversity=ifelse(Site=="Wet_ForestCover19_2021" | Site=="Wet_ForestCover20_2021",NA,Diversity),
+                                                          Simpson=ifelse(Site=="Wet_ForestCover19_2021" | Site=="Wet_ForestCover20_2021",NA,Simpson))
+                                                          
+Seedling_FC_Diversity[sapply(Seedling_FC_Diversity, is.infinite)] <- NA #All inf to NA #Inf related to sites with only 1 individual or species  
+
+Seedling_FC_Diversity[c('ForestType', 'Site', 'Year')] <- str_split_fixed(Seedling_FC_Diversity$Site, '_', 3)
+Seedling_FC_Diversity$AdultSeedling <- "Seedling"
+
+#Merge Adults and Seedlings together
+LU_Diversity <- Seedling_FC_Diversity
+
+fwrite(LU_Diversity, file="LU_Diversity.csv")
+```
+###Calculate differences dependent variables between years
+```{r Differences}
+
+#Join all variables of interest together in one data frame
+
+###Vegetation
+Vegetation_cover <- fread("~/Documents/PANTROP/Manuscripts/Land use history MX/Vegetation_coverMX.csv")
+
+###Structure
+BA_Adults <- fread("~/Documents/PANTROP/Manuscripts/Land use history MX/BA_Adults.csv") 
+BA_Seedlings <- fread("~/Documents/PANTROP/Manuscripts/Land use history MX/BA_Seedlings.csv") 
+
+BA_Adult_Seedling <- rbind(BA_Seedlings, BA_Adults)
+BA_Adult_Seedling <- BA_Adult_Seedling %>% dplyr::select(Forest, Site, Year, AdultSeedling, BA_30cm, Gini, N)
+BA_Adult_Seedling <- BA_Adult_Seedling %>% rename(NrInd=N)
+BA_Adult_Seedling$Year <- as.numeric(BA_Adult_Seedling$Year)
+
+###Diversity
+LU_Diversity <- fread("~/Documents/PANTROP/Manuscripts/Land use history MX/LU_Diversity.csv") 
+LU_Diversity$Year <- as.numeric(LU_Diversity$Year)
+LU_Diversity <- LU_Diversity %>% rename(Forest=ForestType)
+
+#Merge different data
+Dependent_vars <- left_join(BA_Adult_Seedling, LU_Diversity, by=c("Forest", "Site", "Year", "AdultSeedling"))
+Dependent_vars <- left_join(Dependent_vars, Vegetation_cover, by=c("Forest", "Site", "Year"))
+
+Dependent_vars_DFselect <- Dependent_vars %>% filter(Forest == "Dry") %>% filter(!Site=="ForestCover15", !Site=="ForestCover16", !Site=="ForestCover17", !Site=="ForestCover18", !Site=="ForestCover19", !Site=="ForestCover20", !Site=="ForestCover21") #Select sites Dry forest
+Dependent_vars_WFselect <- Dependent_vars %>% filter(Forest == "Wet") 
+
+Dependent_vars_Forests <- rbind(Dependent_vars_DFselect, Dependent_vars_WFselect)
+
+###Replace NA values with zero if applicable
+Dependent_vars_ForestsNoZero <- Dependent_vars_Forests[which(Dependent_vars_Forests$NrInd > 0),] #select sites with individuals
+
+Dependent_vars_ForestsZero <- Dependent_vars_Forests[which(Dependent_vars_Forests$NrInd == 0),] #select sites without individuals
+Dependent_vars_ForestsZero$S[is.na(Dependent_vars_ForestsZero$S)] <- 0
+Dependent_vars_ForestsZero$Gini[is.na(Dependent_vars_ForestsZero$Gini)] <- 0
+Dependent_vars_ForestsZero$Diversity[is.na(Dependent_vars_ForestsZero$Diversity)] <- 0
+Dependent_vars_ForestsZero$Simpson[is.na(Dependent_vars_ForestsZero$Simpson)] <- 0
+
+DependentVars_Final <- rbind(Dependent_vars_ForestsNoZero, Dependent_vars_ForestsZero)
+
+DependentVars_Complete <- DependentVars_Final[complete.cases(DependentVars_Final), ]
+DependentVars_NA <- DependentVars_Final[!complete.cases(DependentVars_Final), ]
+DependentVars_NA_Mutated <- DependentVars_NA %>% mutate(NrInd = ifelse(BA_30cm == 0, 0, NrInd))
+
+Dependent_Variables <- rbind(DependentVars_Complete, DependentVars_NA_Mutated)
+Dependent_Variables$BA_30cm <- as.numeric(Dependent_Variables$BA_30cm)
+Dependent_Variables$NrInd <- as.numeric(Dependent_Variables$NrInd)
+Dependent_Variables$Gini <- as.numeric(Dependent_Variables$Gini)
+
+fwrite(Dependent_Variables, file="Dependent_Variables.csv")
+
+###Calculate difference
+#If first year is zero, value is not divided by the first year of measurement
+DepVars_difference <- Dependent_Variables %>% group_by(Forest, Site, AdultSeedling) %>% dplyr::summarise(BA_30cm = ((BA_30cm[Year==2022]-BA_30cm[Year==2020])/BA_30cm[Year==2020])*100, Gini = ((Gini[Year==2022]-Gini[Year==2020])/Gini[Year==2020])*100, NrInd = ((NrInd[Year==2022]-NrInd[Year==2020])/NrInd[Year==2020])*100, S = ((S[Year==2022]-S[Year==2020])/S[Year==2020])*100, Diversity = ((Diversity[Year==2022]-Diversity[Year==2020])/Diversity[Year==2020])*100, E_Stand = ((E_Stand[Year==2022]-E_Stand[Year==2020])/E_Stand[Year==2020])*100, Simpson = ((Simpson[Year==2022]-Simpson[Year==2020])/Simpson[Year==2020])*100, Cover_ClimbingPalm = ((Cover_ClimbingPalm[Year==2022]-Cover_ClimbingPalm[Year==2020])/Cover_ClimbingPalm[Year==2020])*100, Cover_Grass = ((Cover_Grass[Year==2022]-Cover_Grass[Year==2020])/Cover_Grass[Year==2020])*100, Cover_HerbaceousClimber = ((Cover_HerbaceousClimber[Year==2022]-Cover_HerbaceousClimber[Year==2020])/Cover_HerbaceousClimber[Year==2020])*100, Cover_HerbaceousFern = ((Cover_HerbaceousFern[Year==2022]-Cover_HerbaceousFern[Year==2020])/Cover_HerbaceousFern[Year==2020])*100, Cover_Shrub = ((Cover_Shrub[Year==2022]-Cover_Shrub[Year==2020])/Cover_Shrub[Year==2020])*100, Cover_StemForb = ((Cover_StemForb[Year==2022]-Cover_StemForb[Year==2020])/Cover_StemForb[Year==2020])*100, Cover_Tree = ((Cover_Tree[Year==2022]-Cover_Tree[Year==2020])/Cover_Tree[Year==2020])*100, Cover_TreePalm = ((Cover_TreePalm[Year==2022]-Cover_TreePalm[Year==2020])/Cover_TreePalm[Year==2020])*100, Cover_WoodyClimber = ((Cover_WoodyClimber[Year==2022]-Cover_WoodyClimber[Year==2020])/Cover_WoodyClimber[Year==2020])*100, NoVegetation = ((NoVegetation[Year==2022]-NoVegetation[Year==2020])/NoVegetation[Year==2020])*100,) %>% as.data.frame() 
+
+DepVars_difference$Year <- "2020-2022" 
+summary(DepVars_difference)
+
+write_xlsx(DepVars_difference, "Dependent_variablesDif.xlsx")
+
+DepVars_difference <- read_excel("~/Documents/PANTROP/Manuscripts/Land use history MX/Dependent_variablesDif.xlsx") #DepVars_difference <- subset(DepVars_difference, select = -c(V1))
+
+Dependent_varsSeedling <- Dependent_Variables[which(Dependent_Variables$Forest == "Wet" & Dependent_Variables$AdultSeedling == "Seedling"),]
+
+DepVars_differenceWF_SS <- Dependent_varsSeedling %>% group_by(Forest, Site, AdultSeedling) %>% dplyr::summarise(BA_30cm = ((BA_30cm[Year==2022]-BA_30cm[Year==2021])/BA_30cm[Year==2021])*100, Gini = ((Gini[Year==2022]-Gini[Year==2021])/Gini[Year==2021])*100, NrInd = ((NrInd[Year==2022]-NrInd[Year==2021])/NrInd[Year==2021])*100, S = ((S[Year==2022]-S[Year==2021])/S[Year==2021])*100, Diversity = ((Diversity[Year==2022]-Diversity[Year==2021])/Diversity[Year==2021])*100, E_Stand = ((E_Stand[Year==2022]-E_Stand[Year==2021])/E_Stand[Year==2021])*100, Simpson = ((Simpson[Year==2022]-Simpson[Year==2021])/Simpson[Year==2021])*100) %>% as.data.frame() 
+
+DepVars_differenceWF_SS$Year <- "2020-2022" 
+write_xlsx(DepVars_differenceWF_SS, "Dependent_varsDifSeedlings.xlsx")
+
+# DepVars_differenceWF_SS <- fread("~/Documents/PANTROP/Manuscripts/Land use history MX/Dependent_varsDifSeedlings.csv")
+# Dependent_varsDif <- rbind(DepVars_difference, DepVars_differenceWF_SS) #Paste by hand in excel file and change name
+
+DepVars_Finaldifference <- read_excel("~/Documents/PANTROP/Manuscripts/Land use history MX/Dependent_varsDif.xlsx") 
+DepVars_Finaldifference <- DepVars_Finaldifference %>% as.data.frame()
+DepVars_Finaldifference[3:20] <- sapply(DepVars_Finaldifference[3:20],as.numeric)
+
+Dependent_Variables[ , order(names(Dependent_Variables))]
+DepVars_Finaldifference[ , order(names(DepVars_Finaldifference))]
+Dependent_varsFinalDif <- rbind(Dependent_Variables, DepVars_Finaldifference)
+write_xlsx(Dependent_varsFinalDif, "Dependent_varsFinalDif.xlsx") #Check WF FC4 and FC5 seedling/adult on vegetation cover
+
+```
+
+###Evaluate effect of Land use practices on dependent variables
+```{r Effect LU}
+
+##############################################LU Variable selection
+#Create data frame
+Dependent_varsFinalDif <- read_excel("~/Documents/PANTROP/Manuscripts/Land use history MX/Dependent_varsFinalDif.xlsx") #Vegetation data
+DepVars_LU <- left_join(Dependent_varsFinalDif, LU, by=c("Forest", "Site")) #LU data
+
+Dry_Soil <- Soil_Chem %>% filter(Category == "ForestCover" & Forest == "Dry")
+Dry_Soil <- left_join(Dry_Soil, BulkDensity_DF, by = c("Forest", "Category", "Site", "Subsite_code"))
+Dry_Soil_select <- Dry_Soil %>% dplyr::select(-Category, -Subsite.x, -Subsite.y, -Subsite_code, -Classification, -Comment.x, -Comment.y, -Depth, -'Weight_wet(g)', -'Weight_dry(g)', -'Weight_stones(g)', -Average_dry_weight, -Average_stone_weight, -`Stone_content(g/cm3)`, -Parental_material) #Almost no variation stone content, left out
+
+BulkDensity_WF_select <- BulkDensity_WF %>% filter(Category == "ForestCover" & Forest == "Wet")
+BulkDensity_WF_Finalselect <- BulkDensity_WF_select %>% filter(Depth == "5-10cm") 
+Wet_Soil <- Soil_Chem %>% filter(Category == "ForestCover" & Forest == "Wet")
+Wet_Soil <- left_join(Wet_Soil, BulkDensity_WF_Finalselect, by = c("Forest", "Category", "Site"))
+Wet_Soil_select <- Wet_Soil %>% dplyr::select(-Category, -Subsite.x, -Subsite.y, -Subsite_code.x, -Subsite_code.y, -Classification, -Depth, -'Weight_wet(g)', -'Weight_dry(g)', -'Weight_stones(g)', -`Average dry weight`, -`Average stone weight`, -Comment, -`Stone_content(g/cm3)`, -Parental_material)
+
+Soil_vars <- rbind(Dry_Soil_select, Wet_Soil_select)
+
+DepVars_LU_Soil <- left_join(DepVars_LU, Soil_vars, by=c("Forest", "Site")) %>% as.data.frame()
+
+DepVars_LU_Soil[c(5:10,14, 18, 20:24, 37, 60, 64:67)] <- sapply(DepVars_LU_Soil[c(5:10,14, 18, 20:24, 37, 60, 64:67)],as.numeric)
+str(DepVars_LU_Soil)
+
+```
+###LM DRY Forest 
+```{r Effect LU}
+
+#########################################################2022
+###Selected variables
+DF_LU <- DepVars_LU_Soil[which(DepVars_LU_Soil$Forest=='Dry'& DepVars_LU_Soil$Year=='2022' & DepVars_LU_Soil$AdultSeedling=='Seedling'),] 
+
+DF_LU_Select <- DF_LU %>% dplyr::select(NrInd, S, Diversity, E_Stand, Cover_Grass, Cover_StemForb, Cover_Tree, NoVegetation, Yrs_res, Prev_res)
+CorrelationsLU <- rcorr(as.matrix(DF_LU_Select), type=c("spearman")) #no strong correlations
+
+###Effect soil type and slope on LU practices
+DF_LU_Select2 <- DF_LU %>% dplyr::select(c(27:55,72:73))
+DF_LU_Select2$Soil_type[DF_LU_Select2$Soil_type == 'Leptosol'] <- 1
+DF_LU_Select2$Soil_type[DF_LU_Select2$Soil_type == 'Fluvisol'] <- 2
+DF_LU_Select2$Soil_type[DF_LU_Select2$Soil_type == 'Regosol'] <- 3
+DF_LU_Select2$Soil_type[DF_LU_Select2$Soil_type == 'Cambisol'] <- 4
+
+CorrelationsDF_LU <- rcorr(as.matrix(DF_LU_Select2), type=c("spearman")) #Slope-tillage type (r=-0.54, p=0.06), months pasture (r=-0.66, p=0.01, not sig in Anova) #Soil type - slope (-0.67, p=0.01)
+ggplot(DF_LU_Select2, aes(x=Soil_type, y=Slope)) + geom_point()
+
+#Sig: Soil type - prev crop, Soil type - Field_size, Soil type - Machine, Soil type - Pest_use 
+#Sig: between slope 1 and 3, -1.35 on tillage type
+###Indication: At steeper slopes there is less mechanical tilling and less months of pasture. Also, at steeper slopes there are regosols and cambisols found, while at flatter areas leptopsols and fluvisols are found. Only on cambisols there is sorghum planted, at the other soil types corn (only or in combination with something else). Only on fluvisols and regosols machinery is used. 
+
+t.test(DF_LU$pH ~ factor(DF_LU$Soil_type)) 
+fisher <- fisher.test(DF_LU$Herb_use, DF_LU$Cr_type)
+ggplot(DF_LU, aes(x=Cr_type, y=Pest_use, group=Cr_type)) + geom_boxplot()
+
+hist(DF_LU$Text_silt_perc)
+cor.test(DF_LU$Text_clay_perc, DF_LU$K, method = "spearman")
+cor.test(DF_LU$Months_pa, DF_LU$Text_sand_perc, method = "spearm")
+cor.test(DF_LU$Months_pa, DF_LU$Text_silt_perc, method = "spearm")
+
+#higher clay percentage, higher weeding frequency (Spearman, r=0.56, p=0.049) #Higher clay percentage, more herbicide use (t-test, p=0.04), pesticide use (t-test, p=0.04) and herb/pest frequency (Spearman, r=0.66, p=0.01). Clay is negatively related with sand. With more sand there is less herb/pest frequency (Spearman, r=-0.55, p=0.05). #In soils with more clay crop 3 is more planted than crop 1 (Tukey HSD, p=0.047). Crop 3 is sorghum, where also more pesticides are used, compared to other crops (Fisher test, p=0.04)   
+
+two.way <- aov(weed_freq ~ factor(Prev_res), data = DF_LU)
+summary(two.way)
+plot(two.way)
+tukey.two.way<-TukeyHSD(two.way)
+tukey.two.way
+
+#"Herb_use" "Pest_use"                "Herb_pest_freq"          "Fert_use"                "Soil_quality"            "Cr_type"         #"Wood_use"                "Cattle_nr"               "Stock_rate"              "Months_pa"               "Exotic_grass" 
+
+###Soil quality owners and soil characteristics
+DF_LU_Select3 <- DF_LU %>% dplyr::select(c(49,56:74))
+
+ggplot(DF_LU_Select3, aes(x=factor(Soil_quality), y=Na)) + geom_boxplot()
+
+library(rstatix)
+t.test(DF_LU$Fe ~ factor(DF_LU$Soil_quality)) #Sig difference in Fe (lower with higher soil quality) #pH seems higher with higher soil quality #K seems lower with higher soil quality
+wilcox.test(DF_LU$Fe ~ factor(DF_LU$Soil_quality)) 
+
+DF_LU %>% group_by(Soil_quality) %>% shapiro_test(pH) #p higher than 0.05 -> t-test is applicable
+DF_LU %>% levene_test(pH ~ factor(Soil_quality)) #p higher than 0.05 -> t-test is applicable, p lower than 0.05 -> welch t-test is applicable
+
+#Run lm for all Dependent variables
+##############LU effect on SOIL
+options(na.action = "na.fail")
+
+###pH
+LM_DF_pH <- lm(pH ~ scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Prev_cr) + scale(Til_type) + factor(Machine) + scale(weed_freq) + scale(Stock_rate), data=DF_LU) #Erased weed type (not significant in models and high vif) #Erased factor(Exotic_grass) not significant in the model #Cr_type highly correlated with field size #factor(Prev_cr) high vif value #factor(Prev_lu) high vif value
+m1=dredge(LM_DF_pH, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+pHdata <- as.data.frame(a$coefmat.subset)
+pHdata <- rownames_to_column(pHdata, "IndVars")
+pHdata$Variable <- "pH"
+
+summary(LM_DF_pH)
+plot(LM_DF_pH)
+vif(LM_DF_pH) #Check vif values
+sresid <- studres(LM_DF_pH)
+shapiro.test(sresid) #residuals are not normally distributed (p<0.05)
+bptest(LM_DF_pH) #Data is homoscedastic (p>0.05)
+
+###CE
+LM_DF_CE <- lm(CE ~ scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Prev_cr) + scale(Til_type) + factor(Machine) + scale(weed_freq) + scale(Stock_rate), data=DF_LU) 
+m1=dredge(LM_DF_CE, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+CEdata <- as.data.frame(a$coefmat.subset)
+CEdata <- rownames_to_column(CEdata, "IndVars")
+CEdata$Variable <- "CE"
+
+###OM_perc
+LM_DF_OM_perc <- lm(scale(OM_perc) ~ scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Prev_cr) + scale(Til_type) + factor(Machine) + scale(weed_freq) + scale(Stock_rate), data=DF_LU) 
+m1=dredge(LM_DF_OM_perc, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+OM_percdata <- as.data.frame(a$coefmat.subset)
+OM_percdata <- rownames_to_column(OM_percdata, "IndVars")
+OM_percdata$Variable <- "OM_perc"
+
+###N
+LM_DF_N <- lm(N ~ scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Prev_cr) + scale(Til_type) + factor(Machine) + scale(weed_freq) + scale(Stock_rate), data=DF_LU) 
+m1=dredge(LM_DF_N, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Ndata <- as.data.frame(a$coefmat.subset)
+Ndata <- rownames_to_column(Ndata, "IndVars")
+Ndata$Variable <- "N"
+
+###P
+DF_LU_selectP <- DF_LU[complete.cases(DF_LU$P),]
+LM_DF_P <- lm(scale(P) ~ scale(Field_size) + scale(Til_type), data=DF_LU) 
+#m1=dredge(LM_DF_P, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+#m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(LM_DF_P) #To get the coefficients for the averaged model. 
+Pdata <- as.data.frame(a$coefficients)
+Pdata <- rownames_to_column(Pdata, "IndVars")
+Pdata$Variable <- "P"
+
+###K
+LM_DF_K <- lm(K ~ scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Prev_cr) + scale(Til_type) + factor(Machine) + scale(weed_freq) + scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_K, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Kdata <- as.data.frame(a$coefmat.subset)
+Kdata <- rownames_to_column(Kdata, "IndVars")
+Kdata$Variable <- "K"
+
+###Ca
+LM_DF_Ca <- lm(scale(Ca) ~ scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Prev_cr) + scale(Til_type) + factor(Machine) + scale(weed_freq) + scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_Ca, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cadata <- as.data.frame(a$coefmat.subset)
+Cadata <- rownames_to_column(Cadata, "IndVars")
+Cadata$Variable <- "Ca"
+
+###Mg
+LM_DF_Mg <- lm(scale(Mg) ~ scale(Field_size) + scale(Tot_dur) + scale(weed_freq), data=DF_LU)
+#m1=dredge(LM_DF_Mg, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+#m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(LM_DF_Mg) #To get the coefficients for the averaged model. 
+Mgdata <- as.data.frame(a$coefficients)
+Mgdata <- rownames_to_column(Mgdata, "IndVars")
+Mgdata$Variable <- "Mg"
+
+###Na
+DF_LU_selectNa <- DF_LU[complete.cases(DF_LU$Na),]
+LM_DF_Na <- lm(Na ~ scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Prev_cr) + scale(Til_type) + factor(Machine) + scale(weed_freq) + scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_Na, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Nadata <- as.data.frame(a$coefmat.subset)
+Nadata <- rownames_to_column(Nadata, "IndVars")
+Nadata$Variable <- "Na"
+
+###Text_sand_perc
+LM_DF_Text_sand_perc <- lm(scale(Text_sand_perc) ~ scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Prev_cr) + scale(Til_type) + factor(Machine) + scale(weed_freq) + scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_Text_sand_perc, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Text_sand_percdata <- as.data.frame(a$coefmat.subset)
+Text_sand_percdata <- rownames_to_column(Text_sand_percdata, "IndVars")
+Text_sand_percdata$Variable <- "Text_sand_perc"
+
+###Text_silt_perc
+LM_DF_Text_silt_perc <- lm(scale(Text_silt_perc) ~ scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Prev_cr) + scale(Til_type) + factor(Machine) + scale(weed_freq) + scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_Text_silt_perc, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Text_silt_percdata <- as.data.frame(a$coefmat.subset)
+Text_silt_percdata <- rownames_to_column(Text_silt_percdata, "IndVars")
+Text_silt_percdata$Variable <- "Text_silt_perc"
+
+###Text_clay_perc
+LM_DF_Text_clay_perc <- lm(scale(Text_clay_perc) ~ scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Prev_cr) + scale(Til_type) + factor(Machine) + scale(weed_freq) + scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_Text_clay_perc, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Text_clay_percdata <- as.data.frame(a$coefmat.subset)
+Text_clay_percdata <- rownames_to_column(Text_clay_percdata, "IndVars")
+Text_clay_percdata$Variable <- "Text_clay_perc"
+
+###Fe
+LM_DF_Fe <- lm(scale(Fe) ~ scale(Tot_dur) + scale(Til_type), data=DF_LU)
+#m1=dredge(LM_DF_Fe, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+#m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(LM_DF_Fe) #To get the coefficients for the averaged model. 
+Fedata <- as.data.frame(a$coefficients)
+Fedata <- rownames_to_column(Fedata, "IndVars")
+Fedata$Variable <- "Fe"
+
+###Cu
+LM_DF_Cu <- lm(scale(Cu) ~  scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Machine), data=DF_LU)
+#m1=dredge(LM_DF_Cu, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+#m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(LM_DF_Cu) #To get the coefficients for the averaged model. 
+Cudata <- as.data.frame(a$coefficients)
+Cudata <- rownames_to_column(Cudata, "IndVars")
+Cudata$Variable <- "Cu"
+
+###Zn
+LM_DF_Zn <- lm(Zn ~ scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Prev_cr) + scale(Til_type) + factor(Machine) + scale(weed_freq) + scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_Zn, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Zndata <- as.data.frame(a$coefmat.subset)
+Zndata <- rownames_to_column(Zndata, "IndVars")
+Zndata$Variable <- "Zn"
+
+###Mn
+LM_DF_Mn <- lm(scale(Mn) ~ scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Prev_cr) + scale(Til_type) + factor(Machine) + scale(weed_freq) + scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_Mn, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Mndata <- as.data.frame(a$coefmat.subset)
+Mndata <- rownames_to_column(Mndata, "IndVars")
+Mndata$Variable <- "Mn"
+
+###Bulk_density(g/cm3)
+LM_DF_Bulk_density <- lm(`Bulk_density(g/cm3)` ~ scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Prev_cr) + scale(Til_type) + factor(Machine) + scale(weed_freq) + scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_Bulk_density, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Bulk_densitydata <- as.data.frame(a$coefmat.subset)
+Bulk_densitydata <- rownames_to_column(Bulk_densitydata, "IndVars")
+Bulk_densitydata$Variable <- "Bulk_density"
+
+LM_Dry_Soil <- smartbind(pHdata, CEdata, OM_percdata, Ndata, Pdata, Kdata, Cadata, Mgdata, Nadata, Text_sand_percdata,Text_silt_percdata, Text_clay_percdata,Fedata,Cudata, Zndata, Mndata, Bulk_densitydata)
+LM_Dry_Soil$Category <- "Soil"
+LM_Dry_Soil$Forest <- "Dry"
+
+#######################Effect of Soil and LU on Vegetation
+###Cover_ClimbingPalm #No climbing palms
+
+###Cover_Grass
+LM_DF_Cover_Grass <- lm(scale(Cover_Grass) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Til_type) + factor(Machine) +  scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_Cover_Grass, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <4.5) #Model average models with delta AICc <2
+a <- summary(LM_DF_Cover_Grass) #To get the coefficients for the averaged model. 
+Cover_Grassdata <- as.data.frame(a$coefficients)
+Cover_Grassdata <- rownames_to_column(Cover_Grassdata, "IndVars")
+Cover_Grassdata$Variable <- "Cover_Grass"
+
+###Cover_HerbaceousClimber
+LM_DF_Cover_HerbaceousClimber <- lm(scale(Cover_HerbaceousClimber) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Til_type) + factor(Machine) +  scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_Cover_HerbaceousClimber, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_HerbaceousClimberdata <- as.data.frame(a$coefmat.subset)
+Cover_HerbaceousClimberdata <- rownames_to_column(Cover_HerbaceousClimberdata, "IndVars")
+Cover_HerbaceousClimberdata$Variable <- "Cover_HerbaceousClimber"
+
+summary(LM_DF_Cover_HerbaceousClimber)
+plot(LM_DF_Cover_HerbaceousClimber)
+vif(LM_DF_Cover_HerbaceousClimber) #Check vif values
+sresid <- studres(LM_DF_Cover_HerbaceousClimber)
+shapiro.test(sresid) #residuals are not normally distributed (p<0.05)
+bptest(LM_DF_Cover_HerbaceousClimber) #Data is homoscedastic (p>0.05)
+
+###Cover_HerbaceousFern #No herbaceous fern
+
+###Cover_Shrub
+LM_DF_Cover_Shrub <- lm(scale(Cover_Shrub) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Til_type) + factor(Machine) +  scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_Cover_Shrub, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <4.34) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_Shrubdata <- as.data.frame(a$coefmat.subset)
+Cover_Shrubdata <- rownames_to_column(Cover_Shrubdata, "IndVars")
+Cover_Shrubdata$Variable <- "Cover_Shrub"
+
+###Cover_StemForb
+LM_DF_Cover_StemForb <- lm(scale(Cover_StemForb) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Til_type) + factor(Machine) +  scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_Cover_StemForb, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(LM_DF_Cover_StemForb) #To get the coefficients for the averaged model. 
+Cover_StemForbdata <- as.data.frame(a$coefficients)
+Cover_StemForbdata <- rownames_to_column(Cover_StemForbdata, "IndVars")
+Cover_StemForbdata$Variable <- "Cover_StemForb"
+
+###Cover_Tree
+LM_DF_Cover_Tree <- lm(scale(Cover_Tree) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Til_type) + factor(Machine) +  scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_Cover_Tree, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(LM_DF_Cover_Tree) #To get the coefficients for the averaged model. 
+Cover_Treedata <- as.data.frame(a$coefficients)
+Cover_Treedata <- rownames_to_column(Cover_Treedata, "IndVars")
+Cover_Treedata$Variable <- "Cover_Tree"
+
+###Cover_TreePalm #No tree palm
+
+###Cover_WoodyClimber
+LM_DF_Cover_WoodyClimber <- lm(scale(Cover_WoodyClimber) ~ scale(OM_perc) +  scale(Tot_dur), data=DF_LU)
+#m1=dredge(LM_DF_Cover_WoodyClimber, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+#m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(LM_DF_Cover_WoodyClimber) #To get the coefficients for the averaged model. 
+Cover_WoodyClimberdata <- as.data.frame(a$coefficients)
+Cover_WoodyClimberdata <- rownames_to_column(Cover_WoodyClimberdata, "IndVars")
+Cover_WoodyClimberdata$Variable <- "Cover_WoodyClimber"
+
+###NoVegetation
+LM_DF_NoVegetation <- lm(scale(NoVegetation) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Til_type) + factor(Machine) +  scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_NoVegetation, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <4.03) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+NoVegetationdata <- as.data.frame(a$coefmat.subset)
+NoVegetationdata <- rownames_to_column(NoVegetationdata, "IndVars")
+NoVegetationdata$Variable <- "NoVegetation"
+
+LM_Dry_Vegetation <- smartbind(Cover_Grassdata, Cover_HerbaceousClimberdata, Cover_Shrubdata, Cover_StemForbdata, Cover_Treedata, Cover_WoodyClimberdata, NoVegetationdata, fill=TRUE)
+LM_Dry_Vegetation$Category <- "Vegetation"
+
+#######################Small trees
+###NrInd
+LM_DF_NrInd <- lm(scale(NrInd) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Til_type) + factor(Machine) +  scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_NrInd, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+NrInddata <- as.data.frame(a$coefmat.subset)
+NrInddata <- rownames_to_column(NrInddata, "IndVars")
+NrInddata$Variable <- "NrInd"
+
+###S
+LM_DF_S <- lm(scale(S) ~ scale(K) + scale(Tot_dur) + factor(Machine), data=DF_LU)
+#m1=dredge(LM_DF_S, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+#m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(LM_DF_S) #To get the coefficients for the averaged model. 
+Sdata <- as.data.frame(a$coefficients)
+Sdata <- rownames_to_column(Sdata, "IndVars")
+Sdata$Variable <- "S"
+
+###E_Stand
+LM_DF_E_Stand <- lm(E_Stand ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Til_type) + factor(Machine) +  scale(Stock_rate), data=DF_LU)
+m1=dredge(LM_DF_E_Stand, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+E_Standdata <- as.data.frame(a$coefmat.subset)
+E_Standdata <- rownames_to_column(E_Standdata, "IndVars")
+E_Standdata$Variable <- "E_Stand"
+
+LM_Dry_SmallTrees <- smartbind(NrInddata, Sdata, E_Standdata)
+LM_Dry_SmallTrees$Category <- "SmallTrees"
+
+LM_Dry_2022 <- smartbind(LM_Dry_Vegetation, LM_Dry_SmallTrees)
+LM_Dry_2022$Year <- "2022"
+LM_Dry_2022$Forest <- "Dry"
+
+```
+###LM WET Forest 
+```{r LM Wet forest}
+
+DataGraphD <- DepVars_LU_Soil[which(DepVars_LU_Soil$Forest=='Dry'& DepVars_LU_Soil$Year=='2022' & DepVars_LU_Soil$AdultSeedling=='Adult'),] 
+ggplot(DataGraph, aes(x=factor(Forest), y=`Bulk_density(g/cm3)`)) + geom_boxplot()
+summary(DataGraphD$`Bulk_density(g/cm3)`)
+
+#########################################################2022
+###Selected variables
+WF_LU <- DepVars_LU_Soil[which(DepVars_LU_Soil$Forest=='Wet'& DepVars_LU_Soil$Year=='2022' & DepVars_LU_Soil$AdultSeedling=='Seedling'),] 
+WF_LU <- WF_LU[!duplicated(WF_LU$Site),]
+
+###Effect Previous residence and years of residence on independent small tree and cover variables
+WF_LU_Select <- WF_LU %>% dplyr::select(NrInd, S, Diversity, E_Stand, Cover_Grass, Cover_StemForb, Cover_Tree, NoVegetation, Yrs_res, Prev_res)
+CorrelationsWF_LU <- rcorr(as.matrix(WF_LU_Select), type=c("spearman")) #no strong correlations #no sig anova's between prev_res and other vars
+
+###Effect soil type and slope on LU practices
+WF_LU_Select2 <- WF_LU %>% dplyr::select(c(27:55,72:73))
+WF_LU_Select2$Soil_type[WF_LU_Select2$Soil_type == 'Dystric_cambisol'] <- 1
+WF_LU_Select2$Soil_type[WF_LU_Select2$Soil_type == 'Eutric_cambisol'] <- 2
+
+CorrelationsWF_LU <- rcorr(as.matrix(WF_LU_Select2), type=c("spearman")) #Slope-weeding frequence (0.60) #ggplot(WF_LU_Select2, aes(x=Slope, y=weed_freq)) + geom_point()
+
+#Sig: Slope - Soil type (t-test) steeper slopes for dystric cambisols, further away from the river. #Slope - weeding freq (aov): Between slope 0-1 increase in weeding frequency 1.3. Less slope, lower weeding frequency. Only in flat areas herbicides are used, which can explain the lower frequency but higher intensity. 
+#Sig: Soil type - total duration 2-1 on average 12 years more usage of eutric cambisols #Soil type - fire events 2-1 -2.4 less fire events in eutric cambisols #Soil type - months pasture 2-1 increase of 2.17 months of pasture  
+###Indication: eutric cambisols are closer to river, this area has been used for a longer period of time and changes less frequently from owner (ggplot(WF_LU, aes(x=Yrs_res, y=Tot_dur, colour=Soil_type)) + geom_point()). Less fire events at eutric cambisols. At eutric cambisols more months a year pasture. There are no differences in soil nutrients, but pH + CE + sand content + Cu + Mn are higher in dystric cambisols. Sand content is higher and the terrain has steeper slopes for dystric cambisols, therefore different weeding strategy (more frequent and less intense). Weed problem is not strongly related to soil characteristics. 
+
+WF_LU_Select4 <- WF_LU %>% dplyr::select(c(43, 49,56:74))
+WF_LU_Select4$Soil_type[WF_LU_Select4$Soil_type == 'Dystric_cambisol'] <- 1
+WF_LU_Select4$Soil_type[WF_LU_Select4$Soil_type == 'Eutric_cambisol'] <- 2
+CorrelationsWF_LU <- rcorr(as.matrix(WF_LU_Select4), type=c("spearman"))
+
+WF_LU %>% group_by(Prev_res) %>% shapiro_test(Yrs_res) #p higher than 0.05 -> t-test is applicable
+WF_LU %>% levene_test(Tot_dur ~ Soil_type) #p higher than 0.05 -> t-test is applicable, p higher than 0.05 -> welch t-test is applicable
+
+t.test(WF_LU$pH ~ factor(WF_LU$Soil_type))
+wilcox.test(WF_LU$Yrs_res ~ factor(WF_LU$Soil_type)) 
+
+fisher <- fisher.test(WF_LU$Slope, WF_LU$Soil_type)
+
+WF_LU_selectNa <- WF_LU[complete.cases(WF_LU$Na),]
+two.way <- aov(Cover_Grass ~ factor(weed_freq), data = WF_LU)
+summary(two.way)
+plot(two.way)
+tukey.two.way<-TukeyHSD(two.way)
+tukey.two.way
+
+################################################
+t.test(WF_LU$Yrs_res ~ factor(WF_LU$Prev_res)) 
+fisher <- fisher.test(WF_LU$Herb_use, WF_LU$Cr_type)
+ggplot(WF_LU, aes(x=Cover_Grass, y=Cover_Tree)) + geom_point() + geom_smooth(method = "lm")
+
+hist(WF_LU$Text_silt_perc)
+cor.test(WF_LU$Yrs_res, WF_LU$Slope, method = "spearman")
+cor.test(WF_LU$Herb_pest_freq, WF_LU$Text_sand_perc, method = "pearson")
+cor.test(WF_LU$Months_pa, WF_LU$Text_silt_perc, method = "pearson")
+
+#higher sand percentage less herbicide use (t-test, p<0.01) #Higher clay, more frequently herb/pest use (Spearman, r=0.50, p=0.02) #higher sand, less her/pest frequency (Spearman, r=-0.54, p=0.01) #More clay lower stock rate (Pearson, r=-0.68, p<0.01), More sand higher stock rate (Pearson, r=0.68, p<0.01). Clay-sand are related. 
+
+two.way <- aov(Field_size ~ factor(Prev_res), data = WF_LU)
+summary(two.way)
+plot(two.way)
+tukey.two.way<-TukeyHSD(two.way)
+tukey.two.way
+
+#"Yrs_res" "Prev_res"                "Yrs_lu"                  "Mult_labour"             "Prev_lu"                 "Mo_cr"          "Prev_cr"                 "Field_size"              "Tot_dur"                 "For_age"                 "Fallow_dur"             "fire_events"             "Total_tree_nr"           "Trees_plant"             "Machine"                 "Til_type"               "Til_freq"                "weed_freq"               "weed_problem"            "weed_type"
+#"Herb_use" "Pest_use"                "Herb_pest_freq"          "Fert_use"                "Soil_quality"            "Cr_type"         #"Wood_use"                "Cattle_nr"               "Stock_rate"              "Months_pa"               "Exotic_grass" 
+
+
+###Soil quality owners and soil characteristics
+WF_LU_Select3 <- WF_LU %>% dplyr::select(c(49,56:74))
+
+ggplot(WF_LU_Select3, aes(x=factor(Soil_quality), y=Cu)) + geom_boxplot()
+
+t.test(WF_LU$Cu ~ factor(WF_LU$Soil_quality)) #Sig difference pH higher with higher soil quality, P higher with higher soil quality, Ca higher with higher soil quality, Cu higher with higher soil quality, 
+wilcox.test(WF_LU$Yrs_res ~ factor(WF_LU$Prev_res)) 
+
+###Soil characteristics and slope/soil type
+two.way <- aov(`Bulk_density(g/cm3)` ~ factor(Slope), data = WF_LU_Select3)
+summary(two.way)
+plot(two.way)
+tukey.two.way<-TukeyHSD(two.way)
+tukey.two.way
+
+t.test(WF_LU_Select3$Slope ~ factor(WF_LU_Select3$Soil_type)) #pH + CE + sand content + Cu + Mn higher in dystric cambisols
+
+#Run lm for all Dependent variables
+##############LU effect on SOIL
+options(na.action = "na.fail")
+
+#scale(Field_size) + scale(Tot_dur) + scale(Herb_pest_freq) + scale(Fert_use) + factor(Prev_cr) + scale(Til_type) + factor(Machine) + scale(weed_freq) + scale(Stock_rate) #vars DF for Soil
+
+###pH
+LM_WF_pH <- lm(pH ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) #factor(weed_type) + scale(Field_size) #High vif values
+m1=dredge(LM_WF_pH, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+pHdata <- as.data.frame(a$coefmat.subset)
+pHdata <- rownames_to_column(pHdata, "IndVars")
+pHdata$Variable <- "pH"
+
+summary(LM_WF_pH)
+plot(LM_WF_pH)
+vif(LM_WF_pH) #Check vif values
+sresid <- studres(LM_WF_pH)
+shapiro.test(sresid) #residuals are not normally distributed (p<0.05)
+bptest(LM_WF_pH) #Data is homoscedastic (p>0.05)
+
+###CE
+LM_WF_CE <- lm(CE ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_CE, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+CEdata <- as.data.frame(a$coefmat.subset)
+CEdata <- rownames_to_column(CEdata, "IndVars")
+CEdata$Variable <- "CE"
+
+###OM_perc
+LM_WF_OM_perc <- lm(scale(OM_perc) ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_OM_perc, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+OM_percdata <- as.data.frame(a$coefmat.subset)
+OM_percdata <- rownames_to_column(OM_percdata, "IndVars")
+OM_percdata$Variable <- "OM_perc"
+
+###N
+LM_WF_N <- lm(N ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_N, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Ndata <- as.data.frame(a$coefmat.subset)
+Ndata <- rownames_to_column(Ndata, "IndVars")
+Ndata$Variable <- "N"
+
+###P
+WF_LU_selectP <- WF_LU[complete.cases(WF_LU$P),]
+LM_WF_P <- lm(scale(P) ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU_selectP) 
+m1=dredge(LM_WF_P, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Pdata <- as.data.frame(a$coefmat.subset)
+Pdata <- rownames_to_column(Pdata, "IndVars")
+Pdata$Variable <- "P"
+
+###K
+LM_WF_K <- lm(K ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_K, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Kdata <- as.data.frame(a$coefmat.subset)
+Kdata <- rownames_to_column(Kdata, "IndVars")
+Kdata$Variable <- "K"
+
+###Ca
+LM_WF_Ca <- lm(scale(Ca) ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_Ca, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cadata <- as.data.frame(a$coefmat.subset)
+Cadata <- rownames_to_column(Cadata, "IndVars")
+Cadata$Variable <- "Ca"
+
+###Mg
+LM_WF_Mg <- lm(scale(Mg) ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_Mg, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Mgdata <- as.data.frame(a$coefmat.subset)
+Mgdata <- rownames_to_column(Mgdata, "IndVars")
+Mgdata$Variable <- "Mg"
+
+###Na
+WF_LU_selectNa <- WF_LU[complete.cases(WF_LU$Na),]
+LM_WF_Na <- lm(Na ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU_selectNa) 
+m1=dredge(LM_WF_Na, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Nadata <- as.data.frame(a$coefmat.subset)
+Nadata <- rownames_to_column(Nadata, "IndVars")
+Nadata$Variable <- "Na"
+
+###Text_sand_perc
+LM_WF_Text_sand_perc <- lm(scale(Text_sand_perc) ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_Text_sand_perc, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Text_sand_percdata <- as.data.frame(a$coefmat.subset)
+Text_sand_percdata <- rownames_to_column(Text_sand_percdata, "IndVars")
+Text_sand_percdata$Variable <- "Text_sand_perc"
+
+###Text_silt_perc
+LM_WF_Text_silt_perc <- lm(scale(Text_silt_perc) ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_Text_silt_perc, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Text_silt_percdata <- as.data.frame(a$coefmat.subset)
+Text_silt_percdata <- rownames_to_column(Text_silt_percdata, "IndVars")
+Text_silt_percdata$Variable <- "Text_silt_perc"
+
+###Text_clay_perc
+LM_WF_Text_clay_perc <- lm(scale(Text_clay_perc) ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_Text_clay_perc, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Text_clay_percdata <- as.data.frame(a$coefmat.subset)
+Text_clay_percdata <- rownames_to_column(Text_clay_percdata, "IndVars")
+Text_clay_percdata$Variable <- "Text_clay_perc"
+
+###Fe
+LM_WF_Fe <- lm(scale(Fe) ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_Fe, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Fedata <- as.data.frame(a$coefmat.subset)
+Fedata <- rownames_to_column(Fedata, "IndVars")
+Fedata$Variable <- "Fe"
+
+###Cu
+LM_WF_Cu <- lm(scale(Cu) ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_Cu, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cudata <- as.data.frame(a$coefmat.subset)
+Cudata <- rownames_to_column(Cudata, "IndVars")
+Cudata$Variable <- "Cu"
+
+###Zn
+LM_WF_Zn <- lm(Zn ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_Zn, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Zndata <- as.data.frame(a$coefmat.subset)
+Zndata <- rownames_to_column(Zndata, "IndVars")
+Zndata$Variable <- "Zn"
+
+###Mn
+LM_WF_Mn <- lm(scale(Mn) ~ scale(fire_events) + scale(Months_pa), data=WF_LU) 
+#m1=dredge(LM_WF_Mn, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+#m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(LM_WF_Mn) #To get the coefficients for the averaged model. 
+Mndata <- as.data.frame(a$coefficients)
+Mndata <- rownames_to_column(Mndata, "IndVars")
+Mndata$Variable <- "Mn"
+
+###Bulk_density(g/cm3)
+LM_WF_Bulk_density <- lm(`Bulk_density(g/cm3)` ~ scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_Bulk_density, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Bulk_densitydata <- as.data.frame(a$coefmat.subset)
+Bulk_densitydata <- rownames_to_column(Bulk_densitydata, "IndVars")
+Bulk_densitydata$Variable <- "Bulk_density"
+
+LM_Wet_Soil <- smartbind(pHdata, CEdata, OM_percdata, Ndata, Pdata, Kdata, Cadata, Mgdata, Nadata, Text_sand_percdata,Text_silt_percdata, Text_clay_percdata,Fedata,Cudata, Zndata, Mndata, Bulk_densitydata)
+LM_Wet_Soil$Category <- "Soil"
+LM_Wet_Soil$Forest <- "Wet"
+
+LM_Soil <- smartbind(LM_Dry_Soil, LM_Wet_Soil)
+LM_Soil$Significant <- ifelse(LM_Soil$`Pr(>|z|)`<= 0.05 | LM_Soil$`Pr(>|t|)`<= 0.05, "Sig", "NonSig")
+LM_Soil <- LM_Soil[ which(!LM_Soil$IndVars=="(Intercept)"), ]
+write_xlsx(LM_Soil, "LM_Soil.xlsx")
+
+#######################Effect of Soil and LU on Vegetation
+###Cover_ClimbingPalm
+WF_LU_select <- WF_LU[complete.cases(WF_LU$Cover_ClimbingPalm),]
+  
+LM_WF_Cover_ClimbingPalm <- lm(Cover_ClimbingPalm ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_ClimbingPalm, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_ClimbingPalmdata <- as.data.frame(a$coefmat.subset)
+Cover_ClimbingPalmdata <- rownames_to_column(Cover_ClimbingPalmdata, "IndVars")
+Cover_ClimbingPalmdata$Variable <- "Cover_ClimbingPalm"
+
+###Cover_Grass
+LM_WF_Cover_Grass <- lm(scale(Cover_Grass) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_Grass, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_Grassdata <- as.data.frame(a$coefmat.subset)
+Cover_Grassdata <- rownames_to_column(Cover_Grassdata, "IndVars")
+Cover_Grassdata$Variable <- "Cover_Grass"
+
+###Cover_HerbaceousClimber
+LM_WF_Cover_HerbaceousClimber <- lm(scale(Cover_HerbaceousClimber) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_HerbaceousClimber, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_HerbaceousClimberdata <- as.data.frame(a$coefmat.subset)
+Cover_HerbaceousClimberdata <- rownames_to_column(Cover_HerbaceousClimberdata, "IndVars")
+Cover_HerbaceousClimberdata$Variable <- "Cover_HerbaceousClimber"
+
+###Cover_HerbaceousFern
+LM_WF_Cover_HerbaceousFern <- lm(Cover_HerbaceousFern ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_HerbaceousFern, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_HerbaceousFerndata <- as.data.frame(a$coefmat.subset)
+Cover_HerbaceousFerndata <- rownames_to_column(Cover_HerbaceousFerndata, "IndVars")
+Cover_HerbaceousFerndata$Variable <- "Cover_HerbaceousFern"
+
+###Cover_Shrub
+LM_WF_Cover_Shrub <- lm(scale(Cover_Shrub) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_Shrub, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(LM_WF_Cover_Shrub) #To get the coefficients for the averaged model. 
+Cover_Shrubdata <- as.data.frame(a$coefficients)
+Cover_Shrubdata <- rownames_to_column(Cover_Shrubdata, "IndVars")
+Cover_Shrubdata$Variable <- "Cover_Shrub"
+
+###Cover_StemForb
+LM_WF_Cover_StemForb <- lm(scale(Cover_StemForb) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_StemForb, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(LM_WF_Cover_StemForb) #To get the coefficients for the averaged model. 
+Cover_StemForbdata <- as.data.frame(a$coefficients)
+Cover_StemForbdata <- rownames_to_column(Cover_StemForbdata, "IndVars")
+Cover_StemForbdata$Variable <- "Cover_StemForb"
+
+###Cover_Tree
+LM_WF_Cover_Tree <- lm(scale(Cover_Tree) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_Tree, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_Treedata <- as.data.frame(a$coefmat.subset)
+Cover_Treedata <- rownames_to_column(Cover_Treedata, "IndVars")
+Cover_Treedata$Variable <- "Cover_Tree"
+
+###Cover_TreePalm
+LM_WF_Cover_TreePalm <- lm(Cover_TreePalm ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_TreePalm, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_TreePalmdata <- as.data.frame(a$coefmat.subset)
+Cover_TreePalmdata <- rownames_to_column(Cover_TreePalmdata, "IndVars")
+Cover_TreePalmdata$Variable <- "Cover_TreePalm"
+
+###Cover_WoodyClimber
+LM_WF_Cover_WoodyClimber <- lm(scale(Cover_WoodyClimber) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_WoodyClimber, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_WoodyClimberdata <- as.data.frame(a$coefmat.subset)
+Cover_WoodyClimberdata <- rownames_to_column(Cover_WoodyClimberdata, "IndVars")
+Cover_WoodyClimberdata$Variable <- "Cover_WoodyClimber"
+
+###NoVegetation
+LM_WF_NoVegetation <- lm(scale(NoVegetation) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU_select) 
+m1=dredge(LM_WF_NoVegetation, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+NoVegetationdata <- as.data.frame(a$coefmat.subset)
+NoVegetationdata <- rownames_to_column(NoVegetationdata, "IndVars")
+NoVegetationdata$Variable <- "NoVegetation"
+
+LM_Wet_Vegetation <- smartbind(Cover_ClimbingPalmdata, Cover_Grassdata, Cover_HerbaceousClimberdata, Cover_HerbaceousFerndata, Cover_Shrubdata, Cover_StemForbdata, Cover_Treedata, Cover_TreePalmdata, Cover_WoodyClimberdata, NoVegetationdata, fill=TRUE)
+LM_Wet_Vegetation$Category <- "Vegetation"
+
+#######################Small trees
+###NrInd
+LM_WF_NrInd <- lm(scale(NrInd) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_NrInd, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+NrInddata <- as.data.frame(a$coefmat.subset)
+NrInddata <- rownames_to_column(NrInddata, "IndVars")
+NrInddata$Variable <- "NrInd"
+
+###S
+LM_WF_S <- lm(scale(S) ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_S, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Sdata <- as.data.frame(a$coefmat.subset)
+Sdata <- rownames_to_column(Sdata, "IndVars")
+Sdata$Variable <- "S"
+
+###E_Stand
+LM_WF_E_Stand <- lm(E_Stand ~ scale(OM_perc) + scale(pH) + scale(K) + scale(Tot_dur) + scale(Herb_pest_freq) +  factor(Trees_plant) + factor(Exotic_grass) + scale(weed_freq) + scale(fire_events) + scale(Stock_rate) + scale(Months_pa), data=WF_LU) 
+m1=dredge(LM_WF_E_Stand, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+E_Standdata <- as.data.frame(a$coefmat.subset)
+E_Standdata <- rownames_to_column(E_Standdata, "IndVars")
+E_Standdata$Variable <- "E_Stand"
+
+LM_Wet_SmallTrees <- rbind(NrInddata, Sdata, E_Standdata)
+LM_Wet_SmallTrees$Category <- "SmallTrees"
+
+LM_Wet_2022 <- smartbind(LM_Wet_Vegetation, LM_Wet_SmallTrees)
+LM_Wet_2022$Year <- "2022"
+LM_Wet_2022$Forest <- "Wet"
+
+LM_LU_Soil_Veg <- smartbind(LM_Dry_2022, LM_Wet_2022)
+
+LM_LU_Soil_Veg$Significant <- ifelse(LM_LU_Soil_Veg$`Pr(>|z|)`<= 0.05 | LM_LU_Soil_Veg$`Pr(>|t|)`<= 0.05, "Sig", "NonSig")
+LM_LU_Soil_Veg <- LM_LU_Soil_Veg[ which(!LM_LU_Soil_Veg$IndVars=="(Intercept)"), ]
+
+write_xlsx(LM_LU_Soil_Veg, "LM_LU_Soil_Veg.xlsx")
+
+# summary(LM_WF_Soil)
+# plot(LM_WF_Soil)
+# vif(LM_WF_Soil) #Check vif values
+# sresid <- studres(LM_WF_Soil) 
+# shapiro.test(sresid) #residuals are not normally distributed (p<0.05)
+# bptest(LM_WF_Soil) #Data is homoscedastic (p>0.05)
+
+######Calculate r2 and p-value model
+bestm1= get.models(m1, delta<2) 
+r <- summary(bestm1$`135`)$adj.r.squared
+lmp <- function (LM_WF_pH) {
+	if (class(LM_WF_pH) != "lm") stop("Not an object of class 'lm' ")
+	f <- summary(LM_WF_pH)$fstatistic
+	p <- pf(f[1],f[2],f[3],lower.tail=F)
+	attributes(p) <- NULL
+	return(p)
+}
+lmp(bestm1$`135`)
+
+```
+###LM Soil-vegetation
+```{r LM Soil-vegetation}
+#Dry forest
+
+options(na.action = "na.fail")
+#soil variables: pH, CE, OM_perc, N, P, K, Ca, Mg, Na, Text_sand_perc, Text_silt_perc, Text_clay_perc, Fe, Cu, Zn, Mn, Bulk_density(g/cm3)
+
+###Cover_ClimbingPalm
+
+###Cover_Grass
+LM_DF_Cover_Grass <- lm(scale(Cover_Grass) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=DF_LU) 
+m1=dredge(LM_DF_Cover_Grass, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_Grassdata <- as.data.frame(a$coefmat.subset)
+Cover_Grassdata <- rownames_to_column(Cover_Grassdata, "IndVars")
+Cover_Grassdata$Variable <- "Cover_Grass"
+
+summary(LM_DF_Cover_Grass)
+plot(LM_DF_Cover_Grass)
+vif(LM_DF_Cover_Grass) #Check vif values
+sresid <- studres(LM_DF_Cover_Grass)
+shapiro.test(sresid) #residuals are not normally distributed (p<0.05)
+bptest(LM_DF_Cover_Grass) #Data is homoscedastic (p>0.05)
+
+###Cover_HerbaceousClimber
+LM_DF_Cover_HerbaceousClimber <- lm(scale(Cover_HerbaceousClimber) ~ scale(CE) + scale(N) + scale(`Bulk_density(g/cm3)`), data=DF_LU) 
+#m1=dredge(LM_DF_Cover_HerbaceousClimber, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+#m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(LM_DF_Cover_HerbaceousClimber) #To get the coefficients for the averaged model. 
+Cover_HerbaceousClimberdata <- as.data.frame(a$coefficients)
+Cover_HerbaceousClimberdata <- rownames_to_column(Cover_HerbaceousClimberdata, "IndVars")
+Cover_HerbaceousClimberdata$Variable <- "Cover_HerbaceousClimber"
+
+###Cover_HerbaceousFern
+
+###Cover_Shrub
+LM_DF_Cover_Shrub <- lm(scale(Cover_Shrub) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=DF_LU) 
+m1=dredge(LM_DF_Cover_Shrub, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_Shrubdata <- as.data.frame(a$coefmat.subset)
+Cover_Shrubdata <- rownames_to_column(Cover_Shrubdata, "IndVars")
+Cover_Shrubdata$Variable <- "Cover_Shrub"
+
+###Cover_StemForb
+LM_DF_Cover_StemForb <- lm(scale(Cover_StemForb) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=DF_LU) 
+m1=dredge(LM_DF_Cover_StemForb, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_StemForbdata <- as.data.frame(a$coefmat.subset)
+Cover_StemForbdata <- rownames_to_column(Cover_StemForbdata, "IndVars")
+Cover_StemForbdata$Variable <- "Cover_StemForb"
+
+###Cover_Tree
+LM_DF_Cover_Tree <- lm(scale(Cover_Tree) ~ scale(pH) + scale(OM_perc) + scale(N) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=DF_LU) 
+#m1=dredge(LM_DF_Cover_Tree, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+#m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(LM_DF_Cover_Tree) #To get the coefficients for the averaged model. 
+Cover_Treedata <- as.data.frame(a$coefficients)
+Cover_Treedata <- rownames_to_column(Cover_Treedata, "IndVars")
+Cover_Treedata$Variable <- "Cover_Tree"
+
+###Cover_TreePalm
+
+###Cover_WoodyClimber
+LM_DF_Cover_WoodyClimber <- lm(scale(Cover_WoodyClimber) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=DF_LU) 
+m1=dredge(LM_DF_Cover_WoodyClimber, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_WoodyClimberdata <- as.data.frame(a$coefmat.subset)
+Cover_WoodyClimberdata <- rownames_to_column(Cover_WoodyClimberdata, "IndVars")
+Cover_WoodyClimberdata$Variable <- "Cover_WoodyClimber"
+
+###NoVegetation
+LM_DF_NoVegetation <- lm(scale(NoVegetation) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=DF_LU) 
+m1=dredge(LM_DF_NoVegetation, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <4.41) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+NoVegetationdata <- as.data.frame(a$coefmat.subset)
+NoVegetationdata <- rownames_to_column(NoVegetationdata, "IndVars")
+NoVegetationdata$Variable <- "NoVegetation"
+
+LM_Dry_Vegetation <- smartbind(Cover_Grassdata, Cover_HerbaceousClimberdata, Cover_Shrubdata, Cover_StemForbdata, Cover_Treedata, Cover_WoodyClimberdata, NoVegetationdata, fill=TRUE)
+LM_Dry_Vegetation$Category <- "Vegetation"
+
+#######################Small trees
+###NrInd
+LM_DF_NrInd <- lm(scale(NrInd) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=DF_LU) 
+m1=dredge(LM_DF_NrInd, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+NrInddata <- as.data.frame(a$coefmat.subset)
+NrInddata <- rownames_to_column(NrInddata, "IndVars")
+NrInddata$Variable <- "NrInd"
+
+###S
+LM_DF_S <- lm(scale(S) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=DF_LU) 
+m1=dredge(LM_DF_S, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Sdata <- as.data.frame(a$coefmat.subset)
+Sdata <- rownames_to_column(Sdata, "IndVars")
+Sdata$Variable <- "S"
+
+###E_Stand
+LM_DF_E_Stand <- lm(E_Stand ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=DF_LU)
+m1=dredge(LM_DF_E_Stand, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+E_Standdata <- as.data.frame(a$coefmat.subset)
+E_Standdata <- rownames_to_column(E_Standdata, "IndVars")
+E_Standdata$Variable <- "NE_Stand"
+
+LM_Dry_SmallTrees <- rbind(NrInddata, Sdata, E_Standdata)
+LM_Dry_SmallTrees$Category <- "SmallTrees"
+
+LM_Dry_2022 <- smartbind(LM_Dry_Vegetation, LM_Dry_SmallTrees)
+LM_Dry_2022$Year <- "2022"
+LM_Dry_2022$Forest <- "Dry"
+
+#Wet forest
+#######################Vegetation
+
+WF_LU_select <- WF_LU[complete.cases(WF_LU$P),]
+WF_LU_select <- WF_LU_select[complete.cases(WF_LU_select$Cover_ClimbingPalm),]
+
+###Cover_ClimbingPalm
+LM_WF_Cover_ClimbingPalm <- lm(Cover_ClimbingPalm ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_ClimbingPalm, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_ClimbingPalmdata <- as.data.frame(a$coefmat.subset)
+Cover_ClimbingPalmdata <- rownames_to_column(Cover_ClimbingPalmdata, "IndVars")
+Cover_ClimbingPalmdata$Variable <- "Cover_ClimbingPalm"
+
+summary(LM_WF_Cover_ClimbingPalm)
+plot(LM_WF_Cover_ClimbingPalm)
+vif(LM_WF_Cover_ClimbingPalm) #Check vif values
+sresid <- studres(LM_WF_Cover_ClimbingPalm)
+shapiro.test(sresid) #residuals are not normally distributed (p<0.05)
+bptest(LM_WF_Cover_ClimbingPalm) #Data is homoscedastic (p>0.05)
+
+###Cover_Grass
+LM_WF_Cover_Grass <- lm(scale(Cover_Grass) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_Grass, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_Grassdata <- as.data.frame(a$coefmat.subset)
+Cover_Grassdata <- rownames_to_column(Cover_Grassdata, "IndVars")
+Cover_Grassdata$Variable <- "Cover_Grass"
+
+###Cover_HerbaceousClimber
+LM_WF_Cover_HerbaceousClimber <- lm(scale(Cover_HerbaceousClimber) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_HerbaceousClimber, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_HerbaceousClimberdata <- as.data.frame(a$coefmat.subset)
+Cover_HerbaceousClimberdata <- rownames_to_column(Cover_HerbaceousClimberdata, "IndVars")
+Cover_HerbaceousClimberdata$Variable <- "Cover_HerbaceousClimber"
+
+###Cover_HerbaceousFern
+LM_WF_Cover_HerbaceousFern <- lm(Cover_HerbaceousFern ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_HerbaceousFern, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_HerbaceousFerndata <- as.data.frame(a$coefmat.subset)
+Cover_HerbaceousFerndata <- rownames_to_column(Cover_HerbaceousFerndata, "IndVars")
+Cover_HerbaceousFerndata$Variable <- "Cover_HerbaceousFern"
+
+###Cover_Shrub
+LM_WF_Cover_Shrub <- lm(scale(Cover_Shrub) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_Shrub, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_Shrubdata <- as.data.frame(a$coefmat.subset)
+Cover_Shrubdata <- rownames_to_column(Cover_Shrubdata, "IndVars")
+Cover_Shrubdata$Variable <- "Cover_Shrub"
+
+###Cover_StemForb
+LM_WF_Cover_StemForb <- lm(scale(Cover_StemForb) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_StemForb, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_StemForbdata <- as.data.frame(a$coefmat.subset)
+Cover_StemForbdata <- rownames_to_column(Cover_StemForbdata, "IndVars")
+Cover_StemForbdata$Variable <- "Cover_StemForb"
+
+###Cover_Tree
+LM_WF_Cover_Tree <- lm(scale(Cover_Tree) ~ scale(pH) + scale(K) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=WF_LU_select) 
+#m1=dredge(LM_WF_Cover_Tree, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+#m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(LM_WF_Cover_Tree) #To get the coefficients for the averaged model. 
+Cover_Treedata <- as.data.frame(a$coefficients)
+Cover_Treedata <- rownames_to_column(Cover_Treedata, "IndVars")
+Cover_Treedata$Variable <- "Cover_Tree"
+
+###Cover_TreePalm
+LM_WF_Cover_TreePalm <- lm(Cover_TreePalm ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_TreePalm, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_TreePalmdata <- as.data.frame(a$coefmat.subset)
+Cover_TreePalmdata <- rownames_to_column(Cover_TreePalmdata, "IndVars")
+Cover_TreePalmdata$Variable <- "Cover_TreePalm"
+
+###Cover_WoodyClimber
+LM_WF_Cover_WoodyClimber <- lm(scale(Cover_WoodyClimber) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=WF_LU_select) 
+m1=dredge(LM_WF_Cover_WoodyClimber, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Cover_WoodyClimberdata <- as.data.frame(a$coefmat.subset)
+Cover_WoodyClimberdata <- rownames_to_column(Cover_WoodyClimberdata, "IndVars")
+Cover_WoodyClimberdata$Variable <- "Cover_WoodyClimber"
+
+###NoVegetation
+LM_WF_NoVegetation <- lm(scale(NoVegetation) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=WF_LU_select) 
+m1=dredge(LM_WF_NoVegetation, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+NoVegetationdata <- as.data.frame(a$coefmat.subset)
+NoVegetationdata <- rownames_to_column(NoVegetationdata, "IndVars")
+NoVegetationdata$Variable <- "NoVegetation"
+
+LM_Wet_Vegetation <- smartbind(Cover_ClimbingPalmdata, Cover_Grassdata, Cover_HerbaceousClimberdata, Cover_HerbaceousFerndata, Cover_Shrubdata, Cover_StemForbdata, Cover_Treedata, Cover_TreePalmdata, Cover_WoodyClimberdata, NoVegetationdata, fill=TRUE)
+LM_Wet_Vegetation$Category <- "Vegetation"
+
+#######################Small trees
+###NrInd
+LM_WF_NrInd <- lm(scale(NrInd) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=WF_LU_select) 
+m1=dredge(LM_WF_NrInd, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+NrInddata <- as.data.frame(a$coefmat.subset)
+NrInddata <- rownames_to_column(NrInddata, "IndVars")
+NrInddata$Variable <- "NrInd"
+
+###S
+LM_WF_S <- lm(scale(S) ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=WF_LU_select) 
+m1=dredge(LM_WF_S, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+Sdata <- as.data.frame(a$coefmat.subset)
+Sdata <- rownames_to_column(Sdata, "IndVars")
+Sdata$Variable <- "S"
+
+###E_Stand
+LM_WF_E_Stand <- lm(E_Stand ~ scale(pH) + scale(CE) +  scale(OM_perc) + scale(N) + scale(P) + scale(K) + scale(Mg) + scale(Text_clay_perc) + scale(Cu) + scale(`Bulk_density(g/cm3)`), data=WF_LU_select)
+m1=dredge(LM_WF_E_Stand, REML=FALSE) #REML is a method for estimating variance components in models with random effects. 
+m1_mean <- model.avg(m1, subset = delta <2) #Model average models with delta AICc <2
+a <- summary(m1_mean) #To get the coefficients for the averaged model. 
+E_Standdata <- as.data.frame(a$coefmat.subset)
+E_Standdata <- rownames_to_column(E_Standdata, "IndVars")
+E_Standdata$Variable <- "E_Stand"
+
+LM_Wet_SmallTrees <- rbind(NrInddata, Sdata, E_Standdata)
+LM_Wet_SmallTrees$Category <- "SmallTrees"
+
+LM_Wet_2022 <- smartbind(LM_Wet_Vegetation, LM_Wet_SmallTrees)
+LM_Wet_2022$Year <- "2022"
+LM_Wet_2022$Forest <- "Wet"
+
+LM_Soil_veg <- smartbind(LM_Dry_2022, LM_Wet_2022)
+
+LM_Soil_veg$Significant <- ifelse(LM_Soil_veg$`Pr(>|z|)`<= 0.05 | LM_Soil_veg$`Pr(>|t|)`<= 0.05, "Sig", "NonSig")
+LM_Soil_veg<- LM_Soil_veg[ which(!LM_Soil_veg$IndVars=="(Intercept)"), ]
+
+write_xlsx(LM_Soil_veg, "LM_Soil_veg.xlsx")
+
+
+```
+###Pathmodel
+```{r Pathmodel}
+
+#####Path model
+#Source: https://www.gastonsanchez.com/PLS_Path_Modeling_with_R.pdf
+
+#######################Nizanda
+Slope <- c(0,0,0,0,0)
+Machine <- c(1,0,0,0,0)
+TreeCover <- c(0,1,0,0,0)
+Richness <- c(0,1,0,0,0)
+Evenness <- c(0,1,0,0,0)
+Path <- rbind(Slope, Machine, TreeCover, Richness, Evenness)
+colnames(Path) = rownames(Path)
+innerplot(Path)
+
+#DF_LU$E <- 1-DF_LU$E_correct
+variables <- list(c(39, 40), c(75,18,77), c(39), c(39), c(39, 40))
+foot_modes = rep("A", 5)
+model <- plspm(DF_LU, Path, variables, modes=foot_modes)
+
+model$path_coefs
+model$inner_model
+plot(model)
+plot(model, what = "loadings", arr.width = 0.1)
+
+Model_validation = plspm(DF_LU, Path, variables, modes=foot_modes, boot.val = TRUE, br = 200)
+Model_validation$boot
+
+#######################Loma Bonita 
+Slope       <- c(0,0,0,0) #with exotic grasses no working model
+WeedingFreq <- c(1,0,0,0)
+GrassCover  <- c(0,1,0,0)
+TreeCover   <- c(0,0,1,0)
+
+Path <- rbind(Slope, WeedingFreq, GrassCover, TreeCover)
+colnames(Path) = rownames(Path)
+innerplot(Path)
+
+WF_LU_select <- WF_LU[complete.cases(WF_LU$Cover_Tree),]
+WF_LU_select$Cover_Tree <- as.numeric(WF_LU_select$Cover_Tree)
+variables <- list(c(42), c(13), c(18), c(13))
+foot_modes = rep("A", 4)
+model <- plspm(WF_LU_select, Path, variables, modes=foot_modes)
+
+model$path_coefs
+model$inner_model
+plot(model)
+plot(model, what = "loadings", arr.width = 0.1)
+
+Model_validation = plspm(WF_LU_select, Path, variables, modes=foot_modes, boot.val = TRUE, br = 200)
+Model_validation$boot 
+
+```
+###Figure 3 #Data avialable in Github repository
+```{r Fig 3}
+
+############Nizanda
+LU_Dry <- LU[which(LU$Forest == "Dry" & LU$Category == "ForestCover"),]
+LU_Dry <- LU_Dry %>% filter(!Site=="ForestCover15", !Site=="ForestCover16", !Site=="ForestCover17", !Site=="ForestCover18", !Site=="ForestCover19", !Site=="ForestCover20", !Site=="ForestCover21")
+LU_Dry_select <- LU_Dry %>% dplyr::select(-Country, -Forest, -Category, -Owner, -Yrs_lu, -Mult_labour, -Total_tree_nr, -For_age) #-weed_problem, -Soil_quality
+
+Geo_Dry <- Soil_Chem[which(Soil_Chem$Forest == "Dry" & Soil_Chem$Category == "ForestCover"),]
+Geo_Dry <- Geo_Dry %>% filter(!Site=="ForestCover15", !Site=="ForestCover16", !Site=="ForestCover17", !Site=="ForestCover18", !Site=="ForestCover19", !Site=="ForestCover20", !Site=="ForestCover21")
+Geo_Dry_select <- Geo_Dry %>% dplyr::select(Site, Soil_type, Slope)
+
+LU_Geo_Dry <- dplyr::left_join(Geo_Dry_select, LU_Dry_select, by="Site") %>% as.data.frame()
+
+LU_Geo_Dry$LU_mo <- as.numeric(LU_Geo_Dry$Months_pa) + as.numeric(LU_Geo_Dry$Mo_cr)
+
+###PCA Geo-LU 
+LU_Geo_Dry_select <- LU_Geo_Dry %>% dplyr::select(-Site, -Soil_type, -Slope, -Months_pa, -Mo_cr, -fire_events, -Trees_plant, -Herb_use, -Wood_use) 
+LU_Geo_Dry_select <- LU_Geo_Dry_select %>% rename(`Years residence`=Yrs_res, `Previous residence`=Prev_res, `Previous LU`=Prev_lu, `Months LU`=LU_mo, `Previous crop`=Prev_cr, `Field size`=Field_size, `Total duration`=Tot_dur, `Fallow duration`=Fallow_dur, `Machine use`=Machine, `Tillage type`=Til_type, `Tillage freq`=Til_freq, `Weeding freq`=weed_freq, `Weed problem`=weed_problem, `Weeding type`=weed_type, `Pesticide use`=Pest_use, `Herb/pest freq`=Herb_pest_freq, `Fertiliser use`=Fert_use, `Crop type`=Cr_type, `Cattle nr`=Cattle_nr, `Stock rate`=Stock_rate, `Exotic grass`=Exotic_grass, `Soil quality`=Soil_quality) 
+
+new_order = c("Years residence", "Previous residence", "Weed problem", "Soil quality", #Landowner characteristics & opinion
+              "Field size", "Total duration", "Fallow duration",  "Months LU", #Extent & duration
+              "Weeding type", "Machine use", "Tillage type",  "Pesticide use", "Fertiliser use", "Exotic grass", #Intensity Agri
+               "Cattle nr", "Stock rate",   #Intensity Cattle
+              "Weeding freq",  "Tillage freq", "Herb/pest freq", #Frequency
+              "Previous crop", "Crop type", "Previous LU") #Management
+LU_Geo_Dry_select <- LU_Geo_Dry_select[, new_order]
+
+pca_res <- prcomp(LU_Geo_Dry_select, scale. = TRUE)
+
+barplot(pca_res$rotation[,1], main="PC 1 Loadings Plot", las=2) #PCA statistics
+barplot(pca_res$rotation[,2], main="PC 2 Loadings Plot", las=2)
+
+pca_res$Category <- c("#050505", "#050505", "#050505", "#050505", 
+                      "#858585", "#858585","#858585", "#858585",
+                      "#fc6203","#fc6203","#fc6203","#fc6203","#fc6203", "#fc6203", 
+                      "#0c02c4", "#0c02c4", 
+                      "#57bdf7", "#57bdf7", "#57bdf7", 
+                      "#fcb103", "#fcb103", "#fcb103") 
+
+pca.df <- data.frame(pca1 = pca_res$x[,1], pca2 = pca_res$x[,2], SoilType = as.factor(LU_Geo_Dry$Soil_type), Slope=as.factor(LU_Geo_Dry$Slope))
+pca.df2 <- data.frame(pca1 = pca_res$rotation[,1], pca2 = pca_res$rotation[,2], Category = as.factor(pca_res$Category), labels = row.names(pca_res$rotation))
+
+# fwrite(pca.df, file="pca.df_Nizanda.csv")
+# fwrite(pca.df2, file="pca.df2_Nizanda.csv")
+
+###Load data
+pca.df_N <- fread("~/Documents/PANTROP/Manuscripts/Land use history MX/pca.df_Nizanda.csv") 
+pca.df2_N<- fread("~/Documents/PANTROP/Manuscripts/Land use history MX/pca.df2_Nizanda.csv") 
+
+###Plot graph
+PCA_LU_Nizanda <- ggplot(data=pca.df_N, aes(x=pca1, y = pca2)) + 
+         geom_point(aes(color = factor(Slope), shape =factor(SoilType),), size = 4, alpha = 1) + #stat_ellipse(aes(group=SoilType, color=SoilType), level = 0.68) +
+         scale_shape_manual(values= c(15, 16, 17, 18, 8)) +
+         scale_color_manual(values = c("#e3dad3", "#9c806a", "#754e2f", "#170a00")) +
+         theme_bw() + labs(x = "PCA 1 (26%)", y = "PCA 2 (17%)") + ggtitle("LU-Nizanda") + labs(colour="Slope", shape="Soil type") + 
+         theme(axis.line = element_line(colour = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank(), 
+          legend.position = "bottom", 
+          plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+          legend.title=element_text(size=12, face="bold"),
+          legend.text=element_text(size=12),
+          axis.text.x = element_text(family="sans", size = 14, color = "black"),
+          axis.text.y = element_text(family="sans", size = 14, color = "black"),
+          axis.title.x = element_text(family="sans", size = 14, color = "black"),
+          axis.title.y = element_text(family="sans", size = 14, color = "black")) +
+          guides(colour = guide_legend(order = 1), shape = guide_legend(order = 2)) +
+          geom_segment(data=pca.df2_N,aes(x=0, xend=pca1*10,y=0,yend=pca2*10), arrow = arrow(length = unit(0.5, "cm")), color = pca.df2$Category, alpha = 1) + 
+          geom_text_repel(data=pca.df2_N,aes(x=10*pca1,y=10.5*pca2, label = labels), color = pca.df2$Category, size=5, fontface="bold") 
+
+############Loma Bonita
+LU_Wet <- LU[which(LU$Forest == "Wet" & LU$Category == "ForestCover"),]
+LU_Wet_select <- LU_Wet %>% dplyr::select(-Country, -Forest, -Category, -Owner, -Yrs_lu, -Total_tree_nr, -For_age, -Prev_lu, -Mo_cr, -Prev_cr, -Fallow_dur, -Machine, -Til_type, -Til_freq, -Pest_use, -Fert_use, -Cr_type, -Mult_labour) 
+
+Geo_Wet <- Soil_Chem[which(Soil_Chem$Forest == "Wet" & Soil_Chem$Category == "ForestCover"),]
+Geo_Wet_select <- Geo_Wet %>% dplyr::select(Site, Soil_type, Slope)
+
+LU_Geo_Wet <- dplyr::left_join(Geo_Wet_select, LU_Wet_select, by="Site") %>% as.data.frame()
+
+###PCA Geo-LU 
+LU_Geo_Wet_select <- LU_Geo_Wet %>% dplyr::select(-Site, -Soil_type, -Slope) 
+LU_Geo_Wet_select <- LU_Geo_Wet_select %>% rename(`Years residence`=Yrs_res, `Previous residence`=Prev_res, `Field size`=Field_size, `Total duration`=Tot_dur, `Fire events`=fire_events, `Weeding freq`=weed_freq, `Weed problem`=weed_problem, `Weeding type`=weed_type, `Soil quality`=Soil_quality, `Wood extraction`=Wood_use, `Herbicide use`=Herb_use, `Herb/pest freq`=Herb_pest_freq, `Trees planted`=Trees_plant, `Exotic grass`=Exotic_grass, `Cattle nr`=Cattle_nr, `Stock rate`=Stock_rate, `Months LU`=Months_pa)
+
+new_order = c("Years residence", "Previous residence", "Weed problem", "Soil quality", #Landowner characteristics & opinion
+              "Field size", "Total duration",  "Months LU",  #Extent & duration
+              "Weeding type", "Herbicide use", "Exotic grass", "Trees planted", "Wood extraction", #Intensity Agri
+               "Cattle nr", "Stock rate",   #Intensity Cattle
+              "Weeding freq",  "Herb/pest freq", "Fire events") #Frequency #No Management
+
+
+LU_Geo_Wet_select <- LU_Geo_Wet_select[, new_order]
+
+pca_res <- prcomp(LU_Geo_Wet_select, scale. = TRUE)
+
+barplot(pca_res$rotation[,1], main="PC 1 Loadings Plot", las=2) #PCA statistics
+barplot(pca_res$rotation[,2], main="PC 2 Loadings Plot", las=2)
+
+pca_res$Category <- c("#050505", "#050505", "#050505", "#050505", 
+                      "#858585", "#858585","#858585",
+                      "#fc6203","#fc6203","#fc6203","#fc6203","#fc6203",
+                      "#0c02c4", "#0c02c4", 
+                      "#57bdf7", "#57bdf7", "#57bdf7") 
+
+pca.df<- data.frame(pca1 = pca_res$x[,1], pca2 = pca_res$x[,2], SoilType = as.factor(LU_Geo_Wet$Soil_type), Slope=as.factor(LU_Geo_Wet$Slope))
+pca.df2<- data.frame(pca1 = pca_res$rotation[,1], pca2 = pca_res$rotation[,2], Category = as.factor(pca_res$Category), labels = row.names(pca_res$rotation))
+
+# fwrite(pca.df, file="pca.df_LomaBonita.csv")
+# fwrite(pca.df2, file="pca.df2_LomaBonita.csv")
+
+###Load data
+pca.df_L <- fread("~/Documents/PANTROP/Manuscripts/Land use history MX/pca.df_LomaBonita.csv") 
+pca.df2_L <- fread("~/Documents/PANTROP/Manuscripts/Land use history MX/pca.df2_LomaBonita.csv") 
+
+PCA_LU_Loma <- ggplot(data=pca.df_L, aes(x=pca1, y = pca2)) + 
+         geom_point(aes(color = factor(Slope), shape =factor(SoilType),), size = 4, alpha = 1) + #stat_ellipse(aes(group=SoilType, color=SoilType), level = 0.68) +
+         scale_shape_manual(values= c(15, 16), labels = c("Dystric cambisol", "Eutric cambisol")) + #, 17, 18, 8
+         scale_color_manual(values = c("#e3dad3", "#9c806a", "#754e2f", "#4a390f", "#170a00")) + 
+         theme_bw() + labs(x = "PCA 1 (28%)", y = "PCA 2 (21%)") + ggtitle("LU-Loma Bonita") + labs(colour="Slope", shape="Soil type") +
+         theme(axis.line = element_line(colour = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank(), 
+          legend.position = "bottom", 
+          plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+          legend.title=element_text(size=12, face="bold"),
+          legend.text=element_text(size=12),
+          axis.text.x = element_text(family="sans", size = 14, color = "black"),
+          axis.text.y = element_text(family="sans", size = 14, color = "black"),
+          axis.title.x = element_text(family="sans", size = 14, color = "black"),
+          axis.title.y = element_text(family="sans", size = 14, color = "black")) +
+          guides(colour = guide_legend(order = 1), shape = guide_legend(order = 2)) +
+          geom_segment(data=pca.df2_L,aes(x=0, xend=pca1*10,y=0,yend=pca2*10), arrow = arrow(length = unit(0.5, "cm")), color = pca.df2$Category, alpha = 1) + 
+          geom_text_repel(data=pca.df2_L,aes(x=10*pca1,y=10.5*pca2, label = labels), color = pca.df2$Category, size=5, fontface="bold") 
+
+grid.arrange(PCA_LU_Nizanda, PCA_LU_Loma, ncol=2)
+
+```
+###Figure 4A+D #Data avialable in Github repository
+```{r Fig 4 A+D}
+
+# DF_LU <- DepVars_LU_Soil[which(DepVars_LU_Soil$Forest=='Dry'& DepVars_LU_Soil$Year=='2022' & DepVars_LU_Soil$AdultSeedling=='Seedling'),] 
+# DF_LU <- DF_LU %>% dplyr::select(Machine, Cover_Tree, S, E_Stand)
+# DF_LU$Cover_Tree <- as.numeric(DF_LU$Cover_Tree)
+# DF_LU$S <- as.numeric(DF_LU$S)
+# fwrite(DF_LU, file="DF_LU.csv")
+
+###Load data
+DF_LU <- fread("~/Documents/PANTROP/Manuscripts/Land use history MX/DF_LU.csv") 
+
+# WF_LU <- DepVars_LU_Soil[which(DepVars_LU_Soil$Forest=='Wet'& DepVars_LU_Soil$Year=='2022' & DepVars_LU_Soil$AdultSeedling=='Seedling'),] 
+# WF_LU <- WF_LU %>% dplyr::select(weed_freq, Cover_Grass, Cover_Tree, Stock_rate, NrInd)
+# WF_LU$Cover_Tree <- as.numeric(WF_LU$Cover_Tree)
+# WF_LU$NrInd <- as.numeric(WF_LU$NrInd)
+# str(WF_LU)
+# fwrite(WF_LU, file="WF_LU.csv")
+
+###Load data
+WF_LU <- fread("~/Documents/PANTROP/Manuscripts/Land use history MX/WF_LU.csv") 
+
+DF_Machine_TreeCover_graph <- ggplot(DF_LU, aes(x=factor(Machine), y=Cover_Tree)) + geom_boxplot() + ggtitle("Tree cover") + ylab("Tree cover (%)") + xlab("Machine use") + scale_x_discrete(labels=c("0" = "no", "1" = "yes")) + theme_classic() + theme(plot.title = element_text(hjust = 0.5, size = 12, face = "bold"), legend.position = "none")
+
+DF_Machine_S_graph <- ggplot(DF_LU, aes(x=factor(Machine), y=S)) + geom_boxplot() + ggtitle("Sapling richness") + ylab("Richness") + xlab("Machine use") + scale_x_discrete(labels=c("0" = "no", "1" = "yes")) + theme_classic() + theme(plot.title = element_text(hjust = 0.5, size = 12, face = "bold"), legend.position = "none")
+
+DF_Machine_E_graph <- ggplot(DF_LU, aes(x=factor(Machine), y=E_Stand)) + geom_boxplot() + ggtitle("Sapling evenness") + ylab("Evenness") + xlab("Machine use") + scale_x_discrete(labels=c("0" = "no", "1" = "yes")) + theme_classic() + theme(plot.title = element_text(hjust = 0.5, size = 12, face = "bold"), legend.position = "none")
+
+WF_Weed_GrassCover_graph <- ggplot(WF_LU, aes(x=factor(weed_freq), y=Cover_Grass)) + geom_boxplot() + geom_smooth(method='lm', formula= y~x, color = "black") + ggtitle("Grass cover") + ylab("Grass cover (%)") + xlab("Weeding frequency") + theme_classic() + theme(plot.title = element_text(hjust = 0.5, size = 12, face = "bold"), legend.position = "none")
+
+WF_Grass_TreeCover_graph <- ggplot(WF_LU, aes(x=Cover_Grass, y=Cover_Tree)) + geom_point() + geom_smooth(method='lm', formula= y~x, color = "black") + ggtitle("Tree cover") + ylab("Tree cover (%)") + xlab("Grass cover (%)")+  theme_classic() + theme(plot.title = element_text(hjust = 0.5, size = 12, face = "bold"), legend.position = "none")
+
+WF_StockRate_NrInd_graph <- ggplot(WF_LU, aes(x=Stock_rate, y=log(NrInd))) + geom_point() + geom_smooth(method='lm', formula= y~x, color = "black") + ggtitle("Sapling density") + ylab("Number of saplings (log)") + xlab("Cattle stocking (ha-1)") + theme_classic() + theme(plot.title = element_text(hjust = 0.5, size = 12, face = "bold"), legend.position = "none") 
+
+Niz <- grid.arrange(DF_Machine_TreeCover_graph, DF_Machine_S_graph, DF_Machine_E_graph, ncol=1) 
+LB <- grid.arrange(WF_Weed_GrassCover_graph, WF_Grass_TreeCover_graph, WF_StockRate_NrInd_graph, ncol=1) 
+grid.arrange(Niz, LB, ncol=2) 
+
+```
+###Figure S2+S3
+```{r Fig S2+S3}
+
+###NMDS Geo-LU 
+LU_Geo_Dry <- LU_Geo_Dry[which(!LU_Geo_Dry$Site=="ForestCover11"),]
+LU_Geo_Dry_select <- LU_Geo_Dry %>% dplyr::select(-Months_pa, -Mo_cr, -Site, -Soil_type, -Slope, -Wood_use, -fire_events, -Trees_plant, -Herb_use) #Wood_use
+LU_Geo_Dry_select <- LU_Geo_Dry_select %>% rename(`Previous LU`=Prev_lu, `Months LU`=LU_mo, `Fallow duration`=Fallow_dur, `Years residence`=Yrs_res, `Previous residence`=Prev_res, `Field size`=Field_size, `Total duration`=Tot_dur, `Weeding freq`=weed_freq, `Weed problem`=weed_problem, `Weeding type`=weed_type, `Pesticide use`=Pest_use, `Herb/pest freq`=Herb_pest_freq, `Fertiliser use`=Fert_use, `Soil quality`=Soil_quality, `Previous crop`=Prev_cr, `Machine use`=Machine, `Tillage type`=Til_type, `Tillage freq`=Til_freq,   `Crop type`=Cr_type, `Cattle nr`=Cattle_nr, `Stock rate`=Stock_rate, `Exotic grass`=Exotic_grass)
+
+new_order = c("Years residence", "Previous residence", "Weed problem", "Soil quality", #Landowner characteristics & opinion
+              "Field size", "Total duration", "Fallow duration",  "Months LU",  #Extent & duration
+              "Weeding type", "Machine use", "Tillage type",  "Pesticide use", "Fertiliser use", "Exotic grass", #Intensity Agri
+               "Cattle nr", "Stock rate",   #Intensity Cattle
+              "Weeding freq",  "Tillage freq", "Herb/pest freq", #Frequency
+              "Previous crop", "Crop type", "Previous LU") #Management
+
+LU_Geo_Dry_select <- LU_Geo_Dry_select[, new_order]
+
+Nizanda_LU_NMDS <- metaMDS(LU_Geo_Dry_select, k=2)
+stressplot(Nizanda_LU_NMDS)
+plot(Nizanda_LU_NMDS)
+
+data.scores <- as.data.frame(scores(Nizanda_LU_NMDS)$sites)
+
+site.scrs <- as.data.frame(scores(Nizanda_LU_NMDS, display = "sites"))
+site.scrs <- cbind(site.scrs, SoilType = LU_Geo_Dry$Soil_type)
+site.scrs <- cbind(site.scrs, Slope = LU_Geo_Dry$Slope)
+site.scrs <- cbind(site.scrs, Site = LU_Geo_Dry$Site)
+
+dune.envfit <- envfit(Nizanda_LU_NMDS, LU_Geo_Dry_select, permutations = 999)
+env.scores.dune <- as.data.frame(scores(dune.envfit, display = "vectors")) #extracts relevant scores from envifit
+env.scores.dune <- cbind(env.scores.dune, env.variables = rownames(env.scores.dune)) #and then gives them their names
+
+env.scores.dune$Category <- c("#050505", "#050505", 
+                      "#858585", "#858585","#858585", "#858585","#858585", 
+                      "#fc6203","#fc6203","#fc6203","#fc6203","#fc6203", "#fc6203",
+                       "#0c02c4", "#0c02c4", "#0c02c4", "#0c02c4",
+                      "#57bdf7", "#57bdf7", "#57bdf7", 
+                      "#fcb103", "#fcb103") 
+
+head(env.scores.dune)
+
+nmds.plot.dune <- ggplot(site.scrs, aes(x=NMDS1, y=NMDS2))+ #sets up the plot , label=Site
+  geom_point(aes(NMDS1, NMDS2, colour = factor(site.scrs$SoilType), shape = factor(site.scrs$Slope)), size = 4)+ 
+  coord_fixed()+ scale_shape_manual(values= c(15, 16, 17, 18, 8)) +
+  scale_color_manual(values = c("#ffe9cf", "#d49a55", "#82561d", "#0f0f0f")) + theme_bw() +
+  labs(colour = "Soil type", shape = "Slope")+ # add legend labels for Management and Landuse
+  ggtitle("LU-Nizanda") +
+         theme(axis.line = element_line(colour = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank(), 
+          legend.position = "right", 
+          legend.text = element_text(size = 12), legend.title = element_text(size = 12),
+          plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+          axis.text.x = element_text(family="sans", size = 14, color = "black"),
+          axis.text.y = element_text(family="sans", size = 14, color = "black"),
+          axis.title.x = element_text(family="sans", size = 14, color = "black"),
+          axis.title.y = element_text(family="sans", size = 14, color = "black")) +
+  geom_segment(data = env.scores.dune, aes(x = 0, xend=NMDS1, y=0, yend=NMDS2), arrow = arrow(length = unit(0.5, "cm")), color = env.scores.dune$Category, lwd=0.6, alpha = 1) + 
+  ggrepel::geom_text_repel(data = env.scores.dune, aes(x=NMDS1, y=NMDS2, label = env.variables), cex = 6, direction = "both", segment.size = 5, colour = env.scores.dune$Category) 
+  
+env.scores.dune <- cbind(env.scores.dune, pval = dune.envfit$vectors$pvals) # add pvalues to dataframe
+sig.env.scrs <- subset(env.scores.dune, pval<=0.05) #subset data to show variables significant at 0.05
+
+sig.env.scrs$Category <- c("#858585", "#858585", 
+                      "#fc6203","#fc6203", "#fc6203", 
+                      "#0c02c4",
+                      "#57bdf7", "#57bdf7", 
+                      "#fcb103") #"
+
+nmds.plot.dune <- ggplot(site.scrs, aes(x=NMDS1, y=NMDS2))+ #sets up the plot , label=Site
+  geom_point(aes(NMDS1, NMDS2, colour = factor(site.scrs$SoilType), shape = factor(site.scrs$Slope)), size = 4)+ 
+  coord_fixed()+ scale_shape_manual(values= c(15, 16, 17, 18, 8)) +
+  scale_color_manual(values = c("#ffe9cf", "#d49a55", "#82561d", "#0f0f0f")) + theme_bw() +
+  labs(colour = "Soil type", shape = "Slope")+ # add legend labels for Management and Landuse
+  ggtitle("LU-Nizanda") +
+         theme(axis.line = element_line(colour = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank(), 
+          legend.position = "right", 
+          legend.text = element_text(size = 12), legend.title = element_text(size = 12),
+          plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+          axis.text.x = element_text(family="sans", size = 14, color = "black"),
+          axis.text.y = element_text(family="sans", size = 14, color = "black"),
+          axis.title.x = element_text(family="sans", size = 14, color = "black"),
+          axis.title.y = element_text(family="sans", size = 14, color = "black")) +
+  geom_segment(data = sig.env.scrs, aes(x = 0, xend=NMDS1, y=0, yend=NMDS2), arrow = arrow(length = unit(0.5, "cm")), color = sig.env.scrs$Category, lwd=0.6, alpha = 1) + 
+  ggrepel::geom_text_repel(data = sig.env.scrs, aes(x=NMDS1, y=NMDS2, label = env.variables), cex = 6, direction = "both", segment.size = 5, colour = sig.env.scrs$Category) 
+  
+###Cluster analysis
+LU_Geo_Dry_num <- sapply(LU_Geo_Dry_select, as.numeric )
+Cluster <- varclus(LU_Geo_Dry_num, similarity=c("spearman"),
+        type=c("data.matrix"), 
+        method="complete",
+        data=NULL, subset=NULL, na.action=na.retain,
+        trans=c("none")) #"square", "abs", 
+
+heatmap <- pheatmap(Cluster$sim)
+CorrelationsLU <- rcorr(as.matrix(LU_Geo_Dry_num), type=c("spearman"))
+
+###NMDS Geo-LU 
+Loma_LU_NMDS <- metaMDS(LU_Geo_Wet_select, k=2)
+stressplot(Loma_LU_NMDS)
+plot(Loma_LU_NMDS)
+
+data.scores <- as.data.frame(scores(Loma_LU_NMDS)$sites)
+
+site.scrs <- as.data.frame(scores(Loma_LU_NMDS, display = "sites"))
+site.scrs <- cbind(site.scrs, SoilType = LU_Geo_Wet$Soil_type)
+site.scrs <- cbind(site.scrs, Slope = LU_Geo_Wet$Slope)
+site.scrs <- cbind(site.scrs, Site = LU_Geo_Wet$Site)
+
+dune.envfit <- envfit(Loma_LU_NMDS, LU_Geo_Wet_select, permutations = 999)
+env.scores.dune <- as.data.frame(scores(dune.envfit, display = "vectors")) #extracts relevant scores from envifit
+env.scores.dune <- cbind(env.scores.dune, env.variables = rownames(env.scores.dune)) #and then gives them their names
+
+env.scores.dune$Category <- c("#050505", "#050505", 
+                      "#858585", "#858585",
+                      "#fc6203","#fc6203","#fc6203","#fc6203","#fc6203",
+                      "#0c02c4", "#0c02c4", "#0c02c4",
+                      "#57bdf7", "#57bdf7", 
+                      "#fcb103", "#fcb103", "#fcb103") 
+
+head(env.scores.dune)
+
+nmds.plot.dune <- ggplot(site.scrs, aes(x=NMDS1, y=NMDS2))+ #sets up the plot , label=Site
+  geom_point(aes(NMDS1, NMDS2, colour = factor(site.scrs$SoilType), shape = factor(site.scrs$Slope)), size = 4)+ 
+  coord_fixed()+ scale_shape_manual(values= c(15, 16, 17, 18, 8)) +
+  scale_color_manual(values = c("#ffe9cf", "#d49a55", "#82561d", "#0f0f0f")) + theme_bw() +
+  labs(colour = "Soil type", shape = "Slope")+ # add legend labels for Management and Landuse
+  ggtitle("LU-Loma Bonita") +
+         theme(axis.line = element_line(colour = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank(), 
+          legend.position = "none", 
+          legend.text = element_text(size = 12), legend.title = element_text(size = 12),
+          plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+          axis.text.x = element_text(family="sans", size = 14, color = "black"),
+          axis.text.y = element_text(family="sans", size = 14, color = "black"),
+          axis.title.x = element_text(family="sans", size = 14, color = "black"),
+          axis.title.y = element_text(family="sans", size = 14, color = "black")) +
+  geom_segment(data = env.scores.dune, aes(x = 0, xend=NMDS1, y=0, yend=NMDS2), arrow = arrow(length = unit(0.5, "cm")), color = env.scores.dune$Category, lwd=0.6, alpha = 1) + 
+  ggrepel::geom_text_repel(data = env.scores.dune, aes(x=NMDS1, y=NMDS2, label = env.variables), cex = 6, direction = "both", segment.size = 5, colour = env.scores.dune$Category) 
+  
+env.scores.dune <- cbind(env.scores.dune, pval = dune.envfit$vectors$pvals) # add pvalues to dataframe
+sig.env.scrs <- subset(env.scores.dune, pval<=0.05) #subset data to show variables significant at 0.05
+
+sig.env.scrs$Category <- c("#050505", 
+                      "#858585", 
+                      "#fc6203","#fc6203","#fc6203",
+                      "#0c02c4", "#0c02c4", 
+                      "#57bdf7", 
+                      "#fcb103", "#fcb103") 
+
+nmds.plot.dune <- ggplot(site.scrs, aes(x=NMDS1, y=NMDS2))+ #sets up the plot , label=Site
+  geom_point(aes(NMDS1, NMDS2, colour = factor(site.scrs$SoilType), shape = factor(site.scrs$Slope)), size = 4)+ 
+  coord_fixed()+ scale_shape_manual(values= c(15, 16, 17, 18, 8)) +
+  scale_color_manual(values = c("#ffe9cf", "#d49a55", "#82561d", "#0f0f0f")) + theme_bw() +
+  labs(colour = "Soil type", shape = "Slope")+ # add legend labels for Management and Landuse
+  ggtitle("LU-Loma Bonita") +
+         theme(axis.line = element_line(colour = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank(), 
+          legend.position = "none", 
+          legend.text = element_text(size = 12), legend.title = element_text(size = 12),
+          plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+          axis.text.x = element_text(family="sans", size = 14, color = "black"),
+          axis.text.y = element_text(family="sans", size = 14, color = "black"),
+          axis.title.x = element_text(family="sans", size = 14, color = "black"),
+          axis.title.y = element_text(family="sans", size = 14, color = "black")) +
+  geom_segment(data = sig.env.scrs, aes(x = 0, xend=NMDS1, y=0, yend=NMDS2), arrow = arrow(length = unit(0.5, "cm")), color = sig.env.scrs$Category, lwd=0.6, alpha = 1) + 
+  ggrepel::geom_text_repel(data = sig.env.scrs, aes(x=NMDS1, y=NMDS2, label = env.variables), cex = 6, direction = "both", segment.size = 5, colour = sig.env.scrs$Category) 
+
+###Cluster analysis
+LU_Geo_Wet_num <- sapply(LU_Geo_Wet_select, as.numeric )
+Cluster <- varclus(LU_Geo_Wet_num, similarity=c("spearman"),
+        type=c("data.matrix"), 
+        method="complete",
+        data=NULL, subset=NULL, na.action=na.retain,
+        trans=c("none")) #"square", "abs", 
+
+heatmap <- pheatmap(Cluster$sim)
+CorrelationsLU <- rcorr(as.matrix(LU_Geo_Wet_num), type=c("spearman"))
+
+```
+
+
+
+
