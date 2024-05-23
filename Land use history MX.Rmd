@@ -1677,7 +1677,7 @@ innerplot(Path)
 
 WF_LU_select <- WF_LU[complete.cases(WF_LU$Cover_Tree),]
 WF_LU_select$Cover_Tree <- as.numeric(WF_LU_select$Cover_Tree)
-variables <- list(c(42), c(13), c(18), c(13))
+variables <- list(c(74), c(42), c(13), c(18))
 foot_modes = rep("A", 4)
 model <- plspm(WF_LU_select, Path, variables, modes=foot_modes)
 
